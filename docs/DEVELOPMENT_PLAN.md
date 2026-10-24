@@ -3,65 +3,75 @@
 ## Project definition
 
 - **Purpose:** Provide a standalone Android wake-phrase service that can later dispatch configurable actions.
-- **Target platform/device:** Android; initial physical target is Samsung Galaxy A15 5G (SM-A156U), reported to run Android 16.
+- **Target platform/device:** Android; physical target is Samsung Galaxy A15 5G (SM-A156U), Android 16.
 - **Primary user:** Device owner.
 - **Technology direction:** Native Kotlin Android app; local wake-word detection; visible microphone foreground service.
 - **Distribution:** Versioned GitHub Releases; APKs are not committed to source control.
 
-## Stage 1 scope
+## Stage 1 — single wake phrase/action
 
-1. Install and launch a minimal native Android application.
-2. Let the user grant microphone permission and explicitly start/stop listening from the visible app.
-3. Detect one built-in wake phrase, “Hey Jarvis,” using the open-source openWakeWord Android library and its bundled model.
-4. On detection, post a notification with an action that opens the official ChatGPT Android app when tapped.
-5. Display current listening state and document setup, permissions, build, limitations, and release procedure.
-6. Build a signed-by-Android-debug-keystore APK suitable for sideloading and publish it as a GitHub Release.
+Stage 1 is complete according to the project owner's physical-device report for v1.0.2:
 
-## Explicit exclusions for Stage 1
+- The service listened for “Hey Jarvis” at a 0.35 threshold.
+- Detection produced the action notification.
+- Tapping the notification successfully opened ChatGPT.
 
-- No custom wake-phrase training or model import.
-- No user-configurable phrase-to-action mappings.
-- No arbitrary speech recognition or command parsing.
-- No guarantee of direct background launch into ChatGPT Voice mode; the detection action is a notification the user taps.
-- No auto-start microphone service at boot.
-- No accessibility-service automation, full-screen intent, or device-admin workaround.
-- No cloud audio processing, analytics, accounts, ads, paid features, or application telemetry.
-- No formal project board, resource-planning document, decision-tracing system, research-provenance subsystem, separate validation plan, public documentation vault, or dedicated security document; these optional systems were left disabled in the shared new-project template.
+The v1.0.2 inference correction drops three mel frames generated from the 480-sample overlap between consecutive audio windows.
+
+## Stage 2 — background-process resilience
+
+### Scope in v1.1.0
+
+1. Preserve the Stage 1 wake-word pipeline, 0.35 threshold, detection notification, and ChatGPT action.
+2. Return `START_STICKY` after successful foreground-service startup so Android may recreate the service if it reclaims the app process.
+3. Keep startup and microphone preflight failures non-sticky.
+4. Preserve explicit user start/stop and the persistent notification's Stop action.
+5. Document a physical-device test plan for backgrounding, screen-off operation, process reclamation, and battery-management behavior.
+
+### Explicit exclusions
+
+- No automatic start after reboot.
+- No attempt to restart after the user force-stops the app.
+- No accessibility-service automation, device-admin workaround, or exemption from Android/Samsung restrictions.
+- No custom wake phrase/model, configurable action mapping, arbitrary speech recognition, or automatic ChatGPT Voice activation.
+- No cloud audio processing, analytics, accounts, ads, or paid features.
+- No claim of measured battery life or uninterrupted listening until the target-device tests are completed.
 
 ## Architecture
 
 - **MainActivity:** Permission request, explicit Start/Stop controls, current status, and setup instructions.
-- **WakeWordService:** User-started microphone foreground service with persistent notification.
-- **Wake-word detector:** App-local patched copy of `openwakeword-android:0.1.0` pipeline, using its bundled HEY_JARVIS model and ONNX Runtime assets. The original dependency remains for bundled assets/runtime; the app's patched class drops the three mel frames generated from each 480-sample overlap.
-- **Action:** A detection notification opens ChatGPT only after the user taps it. This avoids relying on background activity launches that Android may block.
-- **Release:** Dedicated .github/workflows/release-1.0.0.yml; build output is attached to a GitHub Release, not committed.
+- **WakeWordService:** User-started microphone foreground service with persistent notification; v1.1.0 uses `START_STICKY` after successful initialization.
+- **Wake-word detector:** App-local patched copy of the openWakeWord Android pipeline using its bundled HEY_JARVIS model and ONNX Runtime assets. Three mel frames from each overlapping audio window are discarded before appending to the rolling mel buffer.
+- **Action:** Detection notification opens ChatGPT only after the user taps it.
+- **Release:** Dedicated workflow per version; APK attached to GitHub Release, not committed to source.
 
-## Readiness gates
+## Stage 2 CI/build gate
 
-### Stage 1 implementation gate
+- [ ] Version code/name updated to 4 / 1.1.0.
+- [ ] Successful service startup returns `START_STICKY`.
+- [ ] Microphone preflight and startup failures still return non-sticky and stop the service.
+- [ ] Gradle debug build succeeds in GitHub Actions.
+- [ ] APK is published as v1.1.0 with expected filename.
+- [ ] Release notes and this plan distinguish CI build from physical-device verification.
 
-- [ ] Project source and build configuration committed.
-- [ ] Dependency resolution and Gradle build succeed in CI.
-- [ ] Streaming mel features append only non-overlapping frames from each audio chunk.
-- [ ] APK is generated and installable.
-- [ ] Manifest/service permissions comply with current Android foreground microphone-service requirements.
-- [ ] README and third-party model licensing notices are present.
+## Stage 2 physical-device acceptance gate
 
-### Stage 1 device-verification gate
+On the Samsung Galaxy A15 5G (SM-A156U), install v1.1.0 and verify:
 
-- [ ] Install on the Samsung Galaxy A15 5G (SM-A156U).
-- [ ] Grant microphone and notification permissions.
-- [ ] Start listening while app is visible; confirm persistent service notification.
-- [ ] Say “Hey Jarvis” and confirm detection triggers the action notification.
-- [ ] Tap the action notification and confirm ChatGPT opens.
-- [ ] Stop listening and confirm microphone capture stops.
-- [ ] Check false positives, lock-screen behavior, thermal/battery impact, and behavior under Samsung battery management.
+1. Start listening from the visible app and confirm the persistent notification appears.
+2. Background the app and lock the screen; say “Hey Jarvis” and confirm the action notification appears.
+3. Tap the detection notification and confirm ChatGPT opens.
+4. Tap Stop in the persistent notification and confirm listening stops.
+5. Leave the app listening with screen off for a defined period and record start/end battery percentage; compare with a similar idle period if practical.
+6. Observe whether Android/Samsung battery management stops the listener.
+7. If Android reclaims the process, observe whether the foreground service is recreated and wake detection resumes. This may be difficult to trigger reliably and is not guaranteed.
+8. Confirm a user-initiated force-stop does not silently restart the app.
 
-**Release readiness is not equivalent to device verification.** CI can verify compilation and APK creation, but only physical-device testing can close the device-verification gate.
+The owner has completed the Stage 1 flow on v1.0.2. Stage 2 background and battery behavior remains unverified until these checks are run on the physical device.
 
-## Known risks and deferred decisions
+## Known limitations
 
-- **Model license:** The library's bundled pretrained wake-word models are CC BY-NC-SA 4.0, despite the library code being Apache-2.0. This model is not suitable for commercial use. Replace it with a suitably licensed model before commercial distribution.
-- **Background restrictions:** Android requires microphone foreground services to be started under allowed conditions and with required permissions. The user must start listening from the visible app.
-- **ChatGPT Voice:** The official app does not expose a verified public intent for direct Voice-mode activation. Stage 1 opens ChatGPT via a user-tapped notification; direct Voice activation is deferred.
-- **Device testing:** This development environment has no Android SDK/Gradle installation and cannot run the APK on the target phone. CI and device results must be reported separately.
+- `START_STICKY` asks Android to recreate a killed service; it does not guarantee it, preserve microphone access under every system state, or restart after force-stop/reboot.
+- Android requires microphone foreground services to be started under permitted conditions. Start listening while the app is visible.
+- The official ChatGPT app does not expose a verified public intent for direct Voice-mode activation.
+- CI build success is not evidence of device behavior or battery performance.

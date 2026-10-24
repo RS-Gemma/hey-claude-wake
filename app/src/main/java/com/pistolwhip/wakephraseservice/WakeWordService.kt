@@ -91,9 +91,12 @@ class WakeWordService : Service() {
             detector = null
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+            return START_NOT_STICKY
         }
 
-        return START_NOT_STICKY
+        // Let Android recreate the foreground service if the process is reclaimed.
+        // Explicit Stop and startup failures still stop the service normally.
+        return START_STICKY
     }
 
     /**
