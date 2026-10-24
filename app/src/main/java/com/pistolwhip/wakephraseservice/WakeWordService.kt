@@ -16,10 +16,9 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
-import com.openwakeword.OpenWakeWord
 
 class WakeWordService : Service() {
-    private var detector: OpenWakeWord? = null
+    private var detector: FixedOpenWakeWord? = null
     private var lastActionAt = 0L
     private var started = false
 
@@ -54,9 +53,9 @@ class WakeWordService : Service() {
                 return START_NOT_STICKY
             }
 
-            setDiagnosticStatus("Microphone check passed; loading wake-word detector", listening = true)
-            detector = OpenWakeWord.Builder(this)
-                .setModel(OpenWakeWord.BuiltInModel.HEY_JARVIS)
+            setDiagnosticStatus("Microphone check passed; loading patched wake-word detector", listening = true)
+            detector = FixedOpenWakeWord.Builder(this)
+                .setModel(FixedOpenWakeWord.BuiltInModel.HEY_JARVIS)
                 // Slightly more sensitive than the original 0.5 threshold.
                 .setThreshold(DETECTION_THRESHOLD)
                 .build()
@@ -78,10 +77,10 @@ class WakeWordService : Service() {
             }
             started = true
             setDiagnosticStatus(
-                "Microphone check passed. Detector started; say “Hey Jarvis” clearly near the phone.",
+                "Microphone check passed. Patched detector started; say “Hey Jarvis” clearly near the phone.",
                 listening = true
             )
-            Log.i(TAG, "Wake-word detector start requested; threshold=$DETECTION_THRESHOLD")
+            Log.i(TAG, "Patched wake-word detector start requested; threshold=$DETECTION_THRESHOLD")
         } catch (error: Exception) {
             Log.e(TAG, "Failed to start wake-word service", error)
             setDiagnosticStatus(
