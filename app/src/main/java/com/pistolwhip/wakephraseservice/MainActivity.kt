@@ -6,14 +6,26 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.text.DateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var statusView: TextView
+    private val statusHandler = Handler(Looper.getMainLooper())
+    private val statusRefresh = object : Runnable {
+        override fun run() {
+            if (::statusView.isInitialized) refreshStatus()
+            statusHandler.postDelayed(this, STATUS_REFRESH_MS)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +51,7 @@ class MainActivity : Activity() {
         root.addView(description, matchWrap())
 
         statusView = TextView(this).apply {
-            textSize = 17f
+            textSize = 16f
             setPadding(0, 8, 0, 24)
         }
         root.addView(statusView, matchWrap())
@@ -65,10 +77,17 @@ class MainActivity : Activity() {
         }
         root.addView(stopButton, matchWrap())
 
-        val privacy = TextView(this).apply {
-            text = "Microphone audio is processed on-device by the wake-word detector. Android shows a persistent notification while listening. Start the service while this screen is visible."
+        val diagnostics = TextView(this).apply {
+            text = "Diagnostics show microphone preflight results and the confidence score when the detector reports a match. The current detector library does not expose below-threshold scores."
             textSize = 13f
             setPadding(0, 24, 0, 0)
+        }
+        root.addView(diagnostics, matchWrap())
+
+        val privacy = TextView(this).apply {
+            text = "Microphone audio is processed on-device. Android shows a persistent notification while listening. Start the service while this screen is visible."
+            textSize = 13f
+            setPadding(0, 12, 0, 0)
         }
         root.addView(privacy, matchWrap())
 
@@ -78,7 +97,18 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::statusView.isInitialized) refreshStatus()
+        statusHandler.removeCallbacks(statusRefresh)
+        statusHandler.post(statusRefresh)
+    }
+
+    override fun onPause() {
+        statusHandler.removeCallbacks(statusRefresh)
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        statusHandler.removeCallbacks(statusRefresh)
+        super.onDestroy()
     }
 
     private fun matchWrap(): LinearLayout.LayoutParams =
@@ -125,16 +155,35 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
-        val listening = getSharedPreferences(WakeWordService.PREFS_NAME, MODE_PRIVATE)
-            .getBoolean(WakeWordService.KEY_LISTENING, false)
-        statusView.text = if (listening) {
-            "Status: listening for “Hey Jarvis”"
+        val prefs = getSharedPreferences(WakeWordService.PREFS_NAME, MODE_PRIVATE)
+        val listening = prefs.getBoolean(WakeWordService.KEY_LISTENING, false)
+        val diagnostic = prefs.getString(WakeWordService.KEY_DIAGNOSTIC_STATUS, null)
+            ?: if (listening) "Detector starting" else "Not listening"
+        val lastScore = if (prefs.contains(WakeWordService.KEY_LAST_SCORE)) {
+            prefs.getFloat(WakeWordService.KEY_LAST_SCORE, 0f)
         } else {
-            "Status: not listening"
+            null
         }
+        val lastDetectionAt = prefs.getLong(WakeWordService.KEY_LAST_DETECTION_AT, 0L)
+
+        val details = buildString {
+            append(if (listening) "Status: active\n" else "Status: inactive\n")
+            append(diagnostic)
+            if (lastScore != null) {
+                append("\nLast confidence score: ")
+                append(String.format(Locale.US, "%.3f", lastScore))
+                if (lastDetectionAt > 0L) {
+                    append(" (")
+                    append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(lastDetectionAt)))
+                    append(")")
+                }
+            }
+        }
+        statusView.text = details
     }
 
     companion object {
         private const val REQUEST_PERMISSIONS = 10
+        private const val STATUS_REFRESH_MS = 1000L
     }
 }
