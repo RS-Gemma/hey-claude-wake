@@ -16,7 +16,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.openwakeword.OpenWakeWord
 
 class WakeWordService : Service() {
@@ -105,7 +104,7 @@ class WakeWordService : Service() {
      * A null result means the preflight succeeded.
      */
     private fun checkMicrophone(): String? {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
             return "Microphone permission is missing. Grant it and start listening again."
