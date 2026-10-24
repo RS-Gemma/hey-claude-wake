@@ -173,7 +173,15 @@ class WakeWordService : Service() {
         }
         detector = null
         started = false
-        setDiagnosticStatus("Not listening", listening = false)
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val priorStatus = prefs.getString(KEY_DIAGNOSTIC_STATUS, "") ?: ""
+        if (!priorStatus.startsWith("Startup failed:") &&
+            !priorStatus.startsWith("Microphone check failed:")
+        ) {
+            setDiagnosticStatus("Not listening", listening = false)
+        } else {
+            prefs.edit().putBoolean(KEY_LISTENING, false).apply()
+        }
         super.onDestroy()
     }
 
