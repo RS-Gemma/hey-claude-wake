@@ -2,7 +2,7 @@
 
 A native Kotlin Android app that listens for one built-in wake phrase locally and surfaces a configured action.
 
-**Current phase:** Stage 1 — single wake phrase, single action; diagnostic build 1.0.1.  
+**Current phase:** Stage 1 — single wake phrase, single action; inference-fix build 1.0.2.  
 **Target device:** Samsung Galaxy A15 5G (SM-A156U), Android 16.  
 **Wake phrase:** “Hey Jarvis” (bundled openWakeWord model).  
 **Action:** Show a notification that opens the official ChatGPT app when tapped. Android restricts direct activity launches from background services; Stage 1 deliberately uses a user-visible notification rather than unreliable UI automation.
@@ -13,9 +13,9 @@ See docs/DEVELOPMENT_PLAN.md for scope and acceptance gates and docs/RELEASE.md 
 
 A source commit is not a verified APK. The Stage 1 release is complete only when GitHub Actions builds an installable APK and publishes it as a GitHub Release. Device-specific microphone, wake-word, notification, and battery behavior still requires physical-device testing.
 
-## Diagnostics in 1.0.1
+## Inference fix and diagnostics in 1.0.2
 
-The app performs a short microphone preflight before starting the detector and displays the result in the app. It also displays a confidence score and timestamp when the detector reports a match. The detector threshold is 0.35 (the original build used 0.5). The upstream detector API only calls back after a score reaches the threshold, so this build does not display scores below threshold. Internal detector-thread errors may still only be visible in Android logs; the preflight helps distinguish common microphone failures from recognition failures.
+The app performs a short microphone preflight before starting the detector and displays the result in the app. It also displays a confidence score and timestamp when the detector reports a match. The detector threshold is 0.35 (the original build used 0.5). Version 1.0.2 includes an app-local patched copy of the detector pipeline that discards the three mel frames produced from the 480-sample overlap between consecutive audio windows. The upstream implementation appended those overlap frames again on every loop, distorting the temporal feature stream. The detector callback only fires after a score reaches the threshold, so the app does not display scores below threshold. Internal detector-thread errors may still only be visible in Android logs; the preflight helps distinguish common microphone failures from recognition failures. The mel-overlap correction is a source-level fix; it still requires a successful CI build and physical-device recognition test before it can be considered verified.
 
 ## Build
 
