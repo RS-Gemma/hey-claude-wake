@@ -2,7 +2,7 @@
 
 A native Kotlin Android app that listens for one built-in wake phrase locally and surfaces a configured action.
 
-**Current phase:** Stage 1 — single wake phrase, single action.  
+**Current phase:** Stage 1 — single wake phrase, single action; diagnostic build 1.0.1.  
 **Target device:** Samsung Galaxy A15 5G (SM-A156U), Android 16.  
 **Wake phrase:** “Hey Jarvis” (bundled openWakeWord model).  
 **Action:** Show a notification that opens the official ChatGPT app when tapped. Android restricts direct activity launches from background services; Stage 1 deliberately uses a user-visible notification rather than unreliable UI automation.
@@ -12,6 +12,10 @@ A native Kotlin Android app that listens for one built-in wake phrase locally an
 See docs/DEVELOPMENT_PLAN.md for scope and acceptance gates and docs/RELEASE.md for release handling.
 
 A source commit is not a verified APK. The Stage 1 release is complete only when GitHub Actions builds an installable APK and publishes it as a GitHub Release. Device-specific microphone, wake-word, notification, and battery behavior still requires physical-device testing.
+
+## Diagnostics in 1.0.1
+
+The app performs a short microphone preflight before starting the detector and displays the result in the app. It also displays a confidence score and timestamp when the detector reports a match. The detector threshold is 0.35 (the original build used 0.5). The upstream detector API only calls back after a score reaches the threshold, so this build does not display scores below threshold. Internal detector-thread errors may still only be visible in Android logs; the preflight helps distinguish common microphone failures from recognition failures.
 
 ## Build
 
