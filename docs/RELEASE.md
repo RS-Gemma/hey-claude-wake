@@ -2,7 +2,7 @@
 
 ## Versioning
 
-Use semantic versioning. Stage 1 is version 1.0.0, release tag v1.0.0, APK name Android-Wake-Phrase-Service-1.0.0.apk.
+Use semantic versioning. Stage 1 initial release is version 1.0.0, release tag v1.0.0, APK name Android-Wake-Phrase-Service-1.0.0.apk. Diagnostic update is version 1.0.1, release tag v1.0.1, APK name Android-Wake-Phrase-Service-1.0.1.apk.
 
 ## Release policy
 
@@ -15,6 +15,10 @@ Use semantic versioning. Stage 1 is version 1.0.0, release tag v1.0.0, APK name 
 ## Stage 1 release workflow
 
 The version-specific workflow builds the APK and publishes it to the v1.0.0 GitHub Release. The repository needs GitHub Actions enabled and the workflow must have contents: write permission to create a release.
+
+## Diagnostic update 1.0.1
+
+The 1.0.1 workflow is `.github/workflows/release-1.0.1.yml`. It performs a microphone preflight, surfaces preflight/startup errors in the app, records detection confidence scores when a detection callback fires, and lowers the detector threshold from 0.5 to 0.35. The upstream library does not expose below-threshold scores through its public API; a lack of score therefore does not prove that audio is absent.
 
 ## Manual build
 
