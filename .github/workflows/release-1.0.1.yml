@@ -1,0 +1,73 @@
+name: Release 1.0.1 — Wake-word diagnostics
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Check whether this release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v1.0.1
+          APK_NAME: Android-Wake-Phrase-Service-1.0.1.apk
+        run: |
+          if release_json=$(gh release view "$TAG" --json assets 2>/dev/null); then
+            if echo "$release_json" | jq -e --arg name "$APK_NAME" '.assets | any(.name == $name)' >/dev/null; then
+              echo "Release $TAG already exists with its expected APK; leaving it unchanged."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Release $TAG already exists but is missing $APK_NAME. Refusing to overwrite or repair it automatically."
+            exit 1
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build installable debug APK
+        if: steps.existing.outputs.skip != 'true'
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Prepare release files
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk Android-Wake-Phrase-Service-1.0.1.apk
+          printf '%s\n' \
+            'Stage 1 — Android Wake Phrase Service 1.0.1 (diagnostics update)' \
+            '' \
+            'Wake phrase: Hey Jarvis (on-device openWakeWord model).' \
+            'Diagnostics: microphone preflight, visible startup status, and last detection confidence score.' \
+            'Detection threshold: 0.35 (previously 0.5).' \
+            'Action: tap the detection notification to open ChatGPT.' \
+            '' \
+            'This APK is debug-signed for sideloading/testing. It is not a Play Store production build.' \
+            'The bundled pretrained wake-word model is CC BY-NC-SA 4.0 and is not licensed for commercial use.' \
+            'Physical-device verification is not implied by a successful CI build.' > RELEASE_NOTES.md
+
+      - name: Publish immutable versioned GitHub Release
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v1.0.1
+        run: |
+          gh release create "$TAG" \
+            Android-Wake-Phrase-Service-1.0.1.apk \
+            --title "Android Wake Phrase Service 1.0.1 — Diagnostics" \
+            --notes-file RELEASE_NOTES.md
