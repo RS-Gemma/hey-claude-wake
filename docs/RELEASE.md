@@ -2,7 +2,7 @@
 
 ## Versioning
 
-Use semantic versioning. Stage 1 initial release is version 1.0.0, release tag v1.0.0, APK name Android-Wake-Phrase-Service-1.0.0.apk. Diagnostic update is version 1.0.1, release tag v1.0.1, APK name Android-Wake-Phrase-Service-1.0.1.apk.
+Use semantic versioning. Stage 1 initial release is version 1.0.0, release tag v1.0.0, APK name Android-Wake-Phrase-Service-1.0.0.apk. Diagnostic update is version 1.0.1, release tag v1.0.1, APK name Android-Wake-Phrase-Service-1.0.1.apk. Inference fix is version 1.0.2, release tag v1.0.2, APK name Android-Wake-Phrase-Service-1.0.2.apk.
 
 ## Release policy
 
@@ -35,3 +35,8 @@ Download Android-Wake-Phrase-Service-1.0.0.apk from the GitHub Release to the ph
 ## Verification record
 
 A release record must state the commit SHA, CI result, APK filename, and whether physical-device tests have passed. Never describe an APK as built or tested until the corresponding evidence exists.
+
+
+## Inference correction 1.0.2
+
+The app now uses a local patched copy of the openWakeWord Android Kotlin pipeline. Each processing iteration analyzes 1,760 audio samples while the next iteration advances by 1,280 samples, leaving a 480-sample overlap. The mel spectrogram for that window includes three frames from the overlap; 1.0.2 drops those three frames before appending to the rolling mel buffer. This corrects a source-level timing/duplication defect. CI build success does not prove wake-word recognition; test on the Galaxy A15 before closing the device-verification gate.
