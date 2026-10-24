@@ -32,7 +32,7 @@
 
 - **MainActivity:** Permission request, explicit Start/Stop controls, current status, and setup instructions.
 - **WakeWordService:** User-started microphone foreground service with persistent notification.
-- **Wake-word detector:** com.github.msnilsen:openwakeword-android:0.1.0, using HEY_JARVIS; inference is on-device.
+- **Wake-word detector:** App-local patched copy of `openwakeword-android:0.1.0` pipeline, using its bundled HEY_JARVIS model and ONNX Runtime assets. The original dependency remains for bundled assets/runtime; the app's patched class drops the three mel frames generated from each 480-sample overlap.
 - **Action:** A detection notification opens ChatGPT only after the user taps it. This avoids relying on background activity launches that Android may block.
 - **Release:** Dedicated .github/workflows/release-1.0.0.yml; build output is attached to a GitHub Release, not committed.
 
@@ -42,6 +42,7 @@
 
 - [ ] Project source and build configuration committed.
 - [ ] Dependency resolution and Gradle build succeed in CI.
+- [ ] Streaming mel features append only non-overlapping frames from each audio chunk.
 - [ ] APK is generated and installable.
 - [ ] Manifest/service permissions comply with current Android foreground microphone-service requirements.
 - [ ] README and third-party model licensing notices are present.
