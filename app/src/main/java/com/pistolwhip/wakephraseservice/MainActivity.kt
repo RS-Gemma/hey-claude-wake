@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
+import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -44,7 +46,7 @@ class MainActivity : Activity() {
         root.addView(title, matchWrap())
 
         val description = TextView(this).apply {
-            text = "Stage 3 tests ChatGPT's supported Start with Voice option. In ChatGPT, open Settings > Voice and enable Start with Voice if available. When ChatGPT opens to a new or empty conversation, it may start Voice automatically. After “Hey Jarvis” is detected, tap the notification to open ChatGPT. This app cannot force Voice mode or launch ChatGPT over the lock screen."
+            text = "Stage 3 experimentally attempts to launch ChatGPT Voice after “Hey Jarvis.” The direct launch uses an undocumented ChatGPT activity and may stop working after an app update. For lock-screen voice, ChatGPT may need to be the system Digital assistant, and this app needs Display over other apps permission. If direct launch fails, tap the detection notification. Listening pauses after detection; restart it after your conversation. In ChatGPT Settings > Voice, enable Background conversations if available."
             textSize = 16f
             setPadding(0, 20, 0, 20)
         }
@@ -77,6 +79,25 @@ class MainActivity : Activity() {
         }
         root.addView(stopButton, matchWrap())
 
+        val overlayButton = Button(this).apply {
+            text = "Enable direct Voice launch"
+            setOnClickListener {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            }
+        }
+        root.addView(overlayButton, matchWrap())
+
+        val assistantSetup = TextView(this).apply {
+            text = "For lock-screen Voice capture, try setting ChatGPT as the phone’s Digital assistant: Settings > Apps > Default apps > Digital assistant app. If ChatGPT is not offered there, this route may not work on this device. The direct launch uses an undocumented ChatGPT component and is experimental."
+            textSize = 13f
+            setPadding(0, 12, 0, 0)
+        }
+        root.addView(assistantSetup, matchWrap())
+
         val diagnostics = TextView(this).apply {
             text = "Diagnostics show microphone preflight results and the confidence score when the detector reports a match. The current detector library does not expose below-threshold scores."
             textSize = 13f
@@ -85,7 +106,7 @@ class MainActivity : Activity() {
         root.addView(diagnostics, matchWrap())
 
         val privacy = TextView(this).apply {
-            text = "Microphone audio is processed on-device. Android shows a persistent notification while listening. Start the service while this screen is visible."
+            text = "Wake-word audio is processed on-device. Display over other apps is a sensitive Android permission used to attempt the wake-triggered launch. Start listening while this screen is visible. After a wake, listening stops to release the microphone to ChatGPT; restart it manually after the conversation."
             textSize = 13f
             setPadding(0, 12, 0, 0)
         }
