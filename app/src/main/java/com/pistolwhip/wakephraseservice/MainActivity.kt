@@ -44,7 +44,7 @@ class MainActivity : Activity() {
         root.addView(title, matchWrap())
 
         val description = TextView(this).apply {
-            text = "Stage 1 listens locally for “Hey Jarvis”. When detected, a notification lets you open ChatGPT. It does not automatically start ChatGPT Voice."
+            text = "Stage 3 tests ChatGPT's supported Start with Voice option. In ChatGPT, open Settings > Voice and enable Start with Voice if available. When ChatGPT opens to a new or empty conversation, it may start Voice automatically. After “Hey Jarvis” is detected, tap the notification to open ChatGPT. This app cannot force Voice mode or launch ChatGPT over the lock screen."
             textSize = 16f
             setPadding(0, 20, 0, 20)
         }
