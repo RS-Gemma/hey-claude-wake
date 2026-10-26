@@ -133,11 +133,16 @@ class MainActivity : Activity() {
             textSize = 14f
         }, matchWrap())
 
+        addShizukuSection(root)
+
         for (method in AssistantLauncher.Method.values()) {
             root.addView(Button(this).apply {
                 text = "Test: ${method.label}"
                 setOnClickListener {
-                    if (!AssistantLauncher.launch(this@MainActivity, method)) {
+                    val command = method.shellCommand
+                    if (command != null) {
+                        runShell(command)
+                    } else if (!AssistantLauncher.launch(this@MainActivity, method)) {
                         toast("Nothing on this phone handles ${method.label}.")
                     }
                 }
@@ -212,6 +217,43 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    private fun addShizukuSection(root: LinearLayout) {
+        val shizukuStatus = TextView(this).apply {
+            textSize = 14f
+            text = "Shizuku: ${ShizukuShell.status()}"
+        }
+        root.addView(shizukuStatus, matchWrap())
+        root.addView(Button(this).apply {
+            text = "Grant Shizuku permission"
+            setOnClickListener {
+                if (!ShizukuShell.isRunning()) {
+                    toast("Shizuku is not running. Open Shizuku and tap Start first.")
+                } else {
+                    ShizukuShell.requestPermission()
+                }
+                shizukuStatus.text = "Shizuku: ${ShizukuShell.status()}"
+            }
+        }, matchWrap())
+        root.addView(Button(this).apply {
+            text = "Dump Claude shortcuts (Shizuku, saves a file)"
+            setOnClickListener {
+                Thread {
+                    val dump = ShizukuShell.run(
+                        "dumpsys shortcut | awk '/Package: com.anthropic.claude/{p=1} p&&/Package: /&&!/com.anthropic.claude/{p=0} p'"
+                    )
+                    runOnUiThread { saveAndShare("claude-shortcuts", dump) }
+                }.start()
+            }
+        }, matchWrap())
+    }
+
+    private fun runShell(command: String) {
+        Thread {
+            val result = ShizukuShell.run(command)
+            runOnUiThread { toast("$command → $result") }
+        }.start()
+    }
+
     private fun addVoiceSwitchFinder(root: LinearLayout) {
         root.addView(TextView(this).apply {
             text = "Find Claude's voice switch"
@@ -239,7 +281,10 @@ class MainActivity : Activity() {
         }, matchWrap())
         root.addView(Button(this).apply {
             text = "Save & share scan (full report as a file)"
-            setOnClickListener { saveAndShare(scanView.text.toString()) }
+            setOnClickListener {
+                val text = scanView.text.toString()
+                if (text.startsWith("Package:")) saveAndShare("claude-scan", text) else toast("Run the scan first.")
+            }
         }, matchWrap())
         root.addView(Button(this).apply {
             text = "Copy scan result"
@@ -277,18 +322,14 @@ class MainActivity : Activity() {
     }
 
     /** Saves [text] to Downloads and opens the share sheet, avoiding clipboard size limits. */
-    private fun saveAndShare(text: String) {
-        if (!text.startsWith("Package:")) {
-            toast("Run the scan first.")
-            return
-        }
+    private fun saveAndShare(name: String, text: String) {
         if (Build.VERSION.SDK_INT < 29) {
             toast("Saving needs Android 10 or newer; use Copy instead.")
             return
         }
         try {
             val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, "claude-scan-${System.currentTimeMillis()}.txt")
+                put(MediaStore.Downloads.DISPLAY_NAME, "$name-${System.currentTimeMillis()}.txt")
                 put(MediaStore.Downloads.MIME_TYPE, "text/plain")
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -298,7 +339,7 @@ class MainActivity : Activity() {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            startActivity(Intent.createChooser(share, "Share Claude scan"))
+            startActivity(Intent.createChooser(share, "Share $name"))
             toast("Saved to Downloads.")
         } catch (error: Exception) {
             toast("Save failed: ${error.javaClass.simpleName}: ${error.message}")

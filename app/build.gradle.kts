@@ -47,4 +47,6 @@ android {
 
 dependencies {
     implementation("com.github.msnilsen:openwakeword-android:0.1.0")
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }

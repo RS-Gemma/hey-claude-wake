@@ -19,7 +19,10 @@ object AssistantLauncher {
     const val CLAUDE_PACKAGE = "com.anthropic.claude"
     const val ACTION_VOICE_ASSIST = "android.intent.action.VOICE_ASSIST"
 
-    enum class Method(val label: String) {
+    enum class Method(val label: String, val shellCommand: String? = null) {
+        SHIZUKU_SHOW("Shizuku: cmd voiceinteraction show", "cmd voiceinteraction show"),
+        SHIZUKU_KEY_ASSIST("Shizuku: assistant key", "input keyevent KEYCODE_ASSIST"),
+        SHIZUKU_KEY_VOICE_ASSIST("Shizuku: voice assistant key", "input keyevent KEYCODE_VOICE_ASSIST"),
         ASSIST("ACTION_ASSIST (system default assistant)"),
         VOICE_ASSIST("ACTION_VOICE_ASSIST"),
         VOICE_COMMAND("ACTION_VOICE_COMMAND"),
@@ -43,6 +46,7 @@ object AssistantLauncher {
     /** Returns the intent for [method], or null if nothing on the device can handle it. */
     fun buildIntent(context: Context, method: Method): Intent? {
         val intent = when (method) {
+            Method.SHIZUKU_SHOW, Method.SHIZUKU_KEY_ASSIST, Method.SHIZUKU_KEY_VOICE_ASSIST -> null
             Method.ASSIST -> Intent(Intent.ACTION_ASSIST)
             Method.VOICE_ASSIST -> Intent(ACTION_VOICE_ASSIST)
             Method.VOICE_COMMAND -> Intent(Intent.ACTION_VOICE_COMMAND)
@@ -54,6 +58,14 @@ object AssistantLauncher {
     }
 
     fun launch(context: Context, method: Method = selectedMethod(context)): Boolean {
+        method.shellCommand?.let { command ->
+            if (!ShizukuShell.hasPermission()) {
+                Log.w(TAG, "Shizuku not ready for $method: ${ShizukuShell.status()}")
+                return false
+            }
+            Thread { ShizukuShell.run(command) }.start()
+            return true
+        }
         val intent = buildIntent(context, method)
         if (intent == null) {
             Log.w(TAG, "No activity handles $method")
@@ -93,6 +105,10 @@ object AssistantLauncher {
             append("\n\n")
             append(method.label)
             append(":\n  ")
+            if (method.shellCommand != null) {
+                append("via Shizuku (${ShizukuShell.status()})")
+                continue
+            }
             val intent = buildIntent(context, method)
             val target = intent?.resolveActivity(pm)
             append(target?.flattenToShortString() ?: "nothing handles this")
