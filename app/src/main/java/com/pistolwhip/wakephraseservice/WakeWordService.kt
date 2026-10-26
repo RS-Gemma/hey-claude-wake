@@ -91,7 +91,6 @@ class WakeWordService : Service() {
 
                 if (now - lastActionAt >= ACTION_COOLDOWN_MS) {
                     lastActionAt = now
-                    showDetectedNotification()
                     handoffToAssistant()
                 }
             }
@@ -214,18 +213,22 @@ class WakeWordService : Service() {
         )
         stopForeground(STOP_FOREGROUND_REMOVE)
 
-        val launched = if (Settings.canDrawOverlays(this)) {
-            AssistantLauncher.launch(this)
+        val method = AssistantLauncher.selectedMethod(this)
+        // Shizuku methods run as the shell and need no overlay permission; intent methods
+        // need it to start an activity from the background.
+        val launched = if (method.shellCommand != null || Settings.canDrawOverlays(this)) {
+            AssistantLauncher.launch(this, method)
         } else {
             Log.i(TAG, "Overlay permission missing; waiting for notification tap instead of direct launch")
             false
         }
         if (!launched) {
+            showDetectedNotification()
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit()
                 .putString(
                     KEY_DIAGNOSTIC_STATUS,
-                    "System assistant did not launch directly. Tap the detection notification; confirm Display over other apps permission is enabled."
+                    "System assistant did not launch directly. Tap the detection notification; check Shizuku is running, or that Display over other apps is enabled."
                 )
                 .putBoolean(KEY_LISTENING, false)
                 .apply()
