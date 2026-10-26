@@ -12,8 +12,12 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
+import android.app.NotificationManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.TextView
 import java.text.DateFormat
 import java.util.Date
@@ -21,6 +25,7 @@ import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var statusView: TextView
+    private lateinit var diagnosticsView: TextView
     private val statusHandler = Handler(Looper.getMainLooper())
     private val statusRefresh = object : Runnable {
         override fun run() {
@@ -39,14 +44,14 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "Wake Phrase Service"
+            text = "Hey Claude"
             textSize = 26f
             gravity = Gravity.CENTER
         }
         root.addView(title, matchWrap())
 
         val description = TextView(this).apply {
-            text = "Stage 3 experimental assistant handoff. The custom “yo, Ai Overlord” detector runs on-device and requests Android’s configured digital assistant overlay. Android may defer assistant operation until unlock. If the assistant does not open, tap the detection notification. Listening pauses after detection; restart it after your conversation."
+            text = "Say “Hey Jarvis” to open your default digital assistant. Detection runs on-device. Listening pauses after detection; restart it after your conversation. If the assistant does not open, tap the detection notification."
             textSize = 16f
             setPadding(0, 20, 0, 20)
         }
@@ -85,7 +90,7 @@ class MainActivity : Activity() {
         root.addView(stopButton, matchWrap())
 
         val overlayButton = Button(this).apply {
-            text = "Enable assistant launch"
+            text = "Allow display over other apps (needed for wake launch)"
             setOnClickListener {
                 val intent = Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -96,33 +101,83 @@ class MainActivity : Activity() {
         }
         root.addView(overlayButton, matchWrap())
 
-        val assistantSetup = TextView(this).apply {
-            text = "The wake trigger requests Android’s configured digital assistant using ACTION_ASSIST, intended to open the same assistant overlay as the power-button gesture. Display over other apps permission is required for this experimental background launch. The wake-word model is a custom candidate and requires real-device false-positive and missed-detection testing."
-            textSize = 13f
-            setPadding(0, 12, 0, 0)
+        val fullScreenButton = Button(this).apply {
+            text = "Allow full-screen notifications (lock-screen fallback)"
+            setOnClickListener {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                }
+            }
         }
-        root.addView(assistantSetup, matchWrap())
+        root.addView(fullScreenButton, matchWrap())
 
-        val diagnostics = TextView(this).apply {
-            text = "Diagnostics now report ONNX model loading, microphone recording state, captured audio frames, inference count, and the latest confidence score. The confidence score updates during listening, including below-threshold results."
+        root.addView(TextView(this).apply {
+            text = "Launch method test"
+            textSize = 20f
+            setPadding(0, 32, 0, 8)
+        }, matchWrap())
+        root.addView(TextView(this).apply {
+            text = "Tap each Test button and note which one opens Claude in voice mode. Then select that method below; the wake phrase will use it."
+            textSize = 14f
+        }, matchWrap())
+
+        for (method in AssistantLauncher.Method.values()) {
+            root.addView(Button(this).apply {
+                text = "Test: ${method.label}"
+                setOnClickListener {
+                    if (!AssistantLauncher.launch(this@MainActivity, method)) {
+                        statusView.text = "Nothing on this phone handles ${method.label}."
+                    }
+                }
+            }, matchWrap())
+        }
+
+        root.addView(TextView(this).apply {
+            text = "Method used by the wake phrase:"
+            textSize = 16f
+            setPadding(0, 24, 0, 8)
+        }, matchWrap())
+        val selected = AssistantLauncher.selectedMethod(this)
+        val methodGroup = RadioGroup(this)
+        for ((index, method) in AssistantLauncher.Method.values().withIndex()) {
+            methodGroup.addView(RadioButton(this).apply {
+                id = index + 1
+                text = method.label
+                isChecked = method == selected
+                setOnClickListener { AssistantLauncher.setSelectedMethod(this@MainActivity, method) }
+            })
+        }
+        root.addView(methodGroup, matchWrap())
+
+        root.addView(TextView(this).apply {
+            text = "Diagnostics"
+            textSize = 20f
+            setPadding(0, 32, 0, 8)
+        }, matchWrap())
+        diagnosticsView = TextView(this).apply {
+            textSize = 12f
+            setTextIsSelectable(true)
+        }
+        root.addView(diagnosticsView, matchWrap())
+
+        root.addView(TextView(this).apply {
+            text = "Wake-word audio is processed on-device. Display over other apps is used only to open the assistant when the wake phrase is detected. Wake phrase model: openWakeWord “Hey Jarvis” (CC BY-NC-SA 4.0, non-commercial)."
             textSize = 13f
             setPadding(0, 24, 0, 0)
-        }
-        root.addView(diagnostics, matchWrap())
+        }, matchWrap())
 
-        val privacy = TextView(this).apply {
-            text = "Wake-word audio is processed on-device. Display over other apps is a sensitive Android permission used to attempt the wake-triggered launch. Start listening while this screen is visible. After a wake, listening stops to release the microphone to ChatGPT; restart it manually after the conversation."
-            textSize = 13f
-            setPadding(0, 12, 0, 0)
-        }
-        root.addView(privacy, matchWrap())
-
-        setContentView(root)
+        setContentView(ScrollView(this).apply { addView(root) })
         refreshStatus()
     }
 
     override fun onResume() {
         super.onResume()
+        diagnosticsView.text = buildDiagnostics()
         statusHandler.removeCallbacks(statusRefresh)
         statusHandler.post(statusRefresh)
     }
@@ -135,6 +190,18 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         statusHandler.removeCallbacks(statusRefresh)
         super.onDestroy()
+    }
+
+    private fun buildDiagnostics(): String = buildString {
+        append("Display over other apps: ")
+        append(if (Settings.canDrawOverlays(this@MainActivity)) "granted" else "NOT granted")
+        if (Build.VERSION.SDK_INT >= 34) {
+            append("\nFull-screen notifications: ")
+            val allowed = getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+            append(if (allowed) "allowed" else "not allowed")
+        }
+        append("\nAndroid SDK: ").append(Build.VERSION.SDK_INT)
+        append("\n\n").append(AssistantLauncher.diagnostics(this@MainActivity))
     }
 
     private fun matchWrap(): LinearLayout.LayoutParams =

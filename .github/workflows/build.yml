@@ -1,0 +1,37 @@
+name: Build test APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Publish APK as a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: build-${{ github.run_number }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk HeyClaude-$TAG.apk
+          gh release create "$TAG" "HeyClaude-$TAG.apk" \
+            --title "Hey Claude test build $TAG" \
+            --notes "Debug-signed test APK built from ${{ github.sha }}. Not verified on a device by CI." \
+            --prerelease

@@ -1,3 +1,15 @@
+# Hey Claude (wake phrase → default assistant)
+
+Fork of [Android Wake Phrase Service](https://github.com/pistolwhip-justin/Android-Wake-Phrase-Service), retargeted to open the system's default digital assistant (Claude) on a Samsung Galaxy S25 Ultra.
+
+**Status:** test build. Wake phrase is the bundled openWakeWord “Hey Jarvis”. The launch method that lands in Claude's voice mode is not yet known; the app offers several methods to test from its main screen (ACTION_ASSIST, ACTION_VOICE_ASSIST, ACTION_VOICE_COMMAND, ACTION_ASSIST sent to Claude, plain Claude launch) and a diagnostics panel. None is verified on a device yet.
+
+**Package ID:** `it.aicdp.heyclaude`. **Builds:** every push to `main` runs `.github/workflows/build.yml` and publishes a debug-signed APK as a GitHub pre-release.
+
+---
+
+## Original README (upstream, partly outdated)
+
 # Android Wake Phrase Service
 
 A native Kotlin Android app that listens for one built-in wake phrase locally and attempts to launch ChatGPT Voice.

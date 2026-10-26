@@ -8,17 +8,26 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.pistolwhip.wakephraseservice"
+        applicationId = "it.aicdp.heyclaude"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.4.1"
+        versionCode = 9
+        versionName = "2.0.0"
         testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
+    }
+
+    // Fixed debug key so each CI build installs as an update over the previous one.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
         release {

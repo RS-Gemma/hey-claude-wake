@@ -63,7 +63,7 @@ class WakeWordService : Service() {
 
             setDiagnosticStatus("Preflight passed; detector thread is loading models and initializing audio.", listening = true)
             detector = FixedOpenWakeWord.Builder(this)
-                .setModelAsset("wakeword/yo_ai_overlord.onnx")
+                .setModel(FixedOpenWakeWord.BuiltInModel.HEY_JARVIS)
                 // Slightly more sensitive than the original 0.5 threshold.
                 .setThreshold(DETECTION_THRESHOLD)
                 .setStatusListener { status, healthy ->
@@ -81,7 +81,7 @@ class WakeWordService : Service() {
             started = true
             detector?.start { score ->
                 val now = SystemClock.elapsedRealtime()
-                Log.i(TAG, "Yo, Ai Overlord detection callback; confidence=$score")
+                Log.i(TAG, "Hey Jarvis detection callback; confidence=$score")
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .edit()
                     .putFloat(KEY_LAST_SCORE, score)
@@ -92,7 +92,7 @@ class WakeWordService : Service() {
                 if (now - lastActionAt >= ACTION_COOLDOWN_MS) {
                     lastActionAt = now
                     showDetectedNotification()
-                    handoffToChatGPTVoice()
+                    handoffToAssistant()
                 }
             }
             Log.i(TAG, "Wake-word detector worker launched; threshold=$DETECTION_THRESHOLD")
@@ -189,11 +189,11 @@ class WakeWordService : Service() {
     }
 
     /**
-     * Release the wake-word microphone before handing control to ChatGPT. ChatGPT's Voice
-     * activity is undocumented, so this is best-effort. The detection notification remains as
-     * a user-tap fallback. Listening stops after a detection and must be restarted manually.
+     * Release the wake-word microphone before handing control to the assistant, which needs
+     * the microphone for voice mode. The detection notification remains as a tap fallback.
+     * Listening stops after a detection and must be restarted manually.
      */
-    private fun handoffToChatGPTVoice() {
+    private fun handoffToAssistant() {
         val currentDetector = detector
         detector = null
         try {
@@ -204,7 +204,7 @@ class WakeWordService : Service() {
         try {
             currentDetector?.release()
         } catch (error: Exception) {
-            Log.w(TAG, "Detector release before ChatGPT handoff failed", error)
+            Log.w(TAG, "Detector release before assistant handoff failed", error)
         }
 
         started = false
@@ -215,7 +215,7 @@ class WakeWordService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
 
         val launched = if (Settings.canDrawOverlays(this)) {
-            ChatGPTVoiceLauncher.launch(this)
+            AssistantLauncher.launch(this)
         } else {
             Log.i(TAG, "Overlay permission missing; waiting for notification tap instead of direct launch")
             false
@@ -261,7 +261,7 @@ class WakeWordService : Service() {
         if (!priorStatus.startsWith("Startup failed:") &&
             !priorStatus.startsWith("Microphone check failed:") &&
             !priorStatus.startsWith("Detector failed:") &&
-            !priorStatus.startsWith("ChatGPT Voice")
+            !priorStatus.startsWith("System assistant")
         ) {
             setDiagnosticStatus("Not listening", listening = false)
         } else {
@@ -310,7 +310,7 @@ class WakeWordService : Service() {
         )
         return notificationBuilder(CHANNEL_LISTENING)
             .setContentTitle("Wake Phrase Service is listening")
-            .setContentText("Say “yo, Ai Overlord” to invoke the system assistant.")
+            .setContentText("Say “Hey Jarvis” to open the assistant.")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setContentIntent(openApp)
@@ -320,20 +320,23 @@ class WakeWordService : Service() {
 
     private fun showDetectedNotification() {
         val manager = getSystemService(NotificationManager::class.java)
-        val launchIntent = packageManager.getLaunchIntentForPackage(CHATGPT_PACKAGE)
-            ?: Intent(Intent.ACTION_VIEW).setData(android.net.Uri.parse(CHATGPT_WEB_URL))
-        val openChatGPT = PendingIntent.getActivity(
+        val launchIntent = AssistantLauncher.buildIntent(this, AssistantLauncher.selectedMethod(this))
+            ?: Intent(this, MainActivity::class.java)
+        val openAssistant = PendingIntent.getActivity(
             this,
-            REQUEST_OPEN_CHATGPT,
+            REQUEST_OPEN_ASSISTANT,
             launchIntent,
             pendingIntentFlags()
         )
         val notification = notificationBuilder(CHANNEL_DETECTED)
             .setContentTitle("Wake phrase detected")
-            .setContentText("If the assistant did not open, tap here to open ChatGPT. Listening pauses after detection.")
+            .setContentText("If the assistant did not open, tap here. Listening pauses after detection.")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setAutoCancel(true)
-            .setContentIntent(openChatGPT)
+            .setContentIntent(openAssistant)
+            // Lets Android open the assistant over the lock screen when a direct launch is blocked,
+            // if the user allows full-screen notifications for this app.
+            .setFullScreenIntent(openAssistant, true)
             .build()
         manager.notify(DETECTED_NOTIFICATION_ID, notification)
     }
@@ -354,12 +357,13 @@ class WakeWordService : Service() {
         }
 
     companion object {
-        const val ACTION_STOP = "com.pistolwhip.wakephraseservice.action.STOP"
+        const val ACTION_STOP = "it.aicdp.heyclaude.action.STOP"
         const val PREFS_NAME = "wake_phrase_service"
         const val KEY_LISTENING = "is_listening"
         const val KEY_DIAGNOSTIC_STATUS = "diagnostic_status"
         const val KEY_LAST_SCORE = "last_confidence_score"
         const val KEY_LAST_DETECTION_AT = "last_detection_at"
+        const val KEY_LAUNCH_METHOD = "launch_method"
 
         private const val TAG = "WakePhraseService"
         private const val SAMPLE_RATE = 16000
@@ -370,10 +374,8 @@ class WakeWordService : Service() {
         private const val LISTENING_NOTIFICATION_ID = 1001
         private const val DETECTED_NOTIFICATION_ID = 1002
         private const val REQUEST_OPEN_APP = 2001
-        private const val REQUEST_OPEN_CHATGPT = 2002
+        private const val REQUEST_OPEN_ASSISTANT = 2002
         private const val REQUEST_STOP = 2003
         private const val ACTION_COOLDOWN_MS = 8000L
-        private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
-        private const val CHATGPT_WEB_URL = "https://chatgpt.com/"
     }
 }
