@@ -15,6 +15,9 @@ import android.view.ViewGroup
 import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.view.WindowInsets
 import android.widget.EditText
 import android.widget.Toast
 import android.widget.Button
@@ -177,7 +180,18 @@ class MainActivity : Activity() {
             setPadding(0, 24, 0, 0)
         }, matchWrap())
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        val scroll = ScrollView(this).apply { addView(root) }
+        // Android 15+ draws apps edge-to-edge; keep content clear of the status and navigation bars.
+        if (Build.VERSION.SDK_INT >= 30) {
+            scroll.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
+        } else {
+            scroll.fitsSystemWindows = true
+        }
+        setContentView(scroll)
         refreshStatus()
     }
 
@@ -224,6 +238,10 @@ class MainActivity : Activity() {
             }
         }, matchWrap())
         root.addView(Button(this).apply {
+            text = "Save & share scan (full report as a file)"
+            setOnClickListener { saveAndShare(scanView.text.toString()) }
+        }, matchWrap())
+        root.addView(Button(this).apply {
             text = "Copy scan result"
             setOnClickListener {
                 getSystemService(ClipboardManager::class.java)
@@ -256,6 +274,35 @@ class MainActivity : Activity() {
                 if (isService) tryStartService(intent) else tryLaunch(intent)
             }
         }, matchWrap())
+    }
+
+    /** Saves [text] to Downloads and opens the share sheet, avoiding clipboard size limits. */
+    private fun saveAndShare(text: String) {
+        if (!text.startsWith("Package:")) {
+            toast("Run the scan first.")
+            return
+        }
+        if (Build.VERSION.SDK_INT < 29) {
+            toast("Saving needs Android 10 or newer; use Copy instead.")
+            return
+        }
+        try {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, "claude-scan-${System.currentTimeMillis()}.txt")
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("could not create file")
+            contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+            val share = Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(share, "Share Claude scan"))
+            toast("Saved to Downloads.")
+        } catch (error: Exception) {
+            toast("Save failed: ${error.javaClass.simpleName}: ${error.message}")
+        }
     }
 
     /**

@@ -14,7 +14,6 @@ object ClaudeScanner {
     private val interesting = Regex("(?i)voice|claude://|claude\\.ai|deeplink|deep_link|shortcut|bell|assist|call_?window|launch_?mode|start_")
     // Class names and method signatures: obfuscated noise that hides the useful keys.
     private val noise = Regex("^\\[*L[\\w/\$]+;$|^\\(.*\\).+|^com\\.anthropic\\.voice\\.internal|ASSISTANT_|_ASSISTANT_OUTPUT|schemas\\.android\\.com")
-    private const val MAX_LINES = 400
 
     fun scan(context: Context): String {
         val pkg = AssistantLauncher.assistantPackage(context)
@@ -65,10 +64,8 @@ object ClaudeScanner {
             append("\n== Shortcut files ==\n").append(shortcutFiles)
             append("\n== Resources (${resourceHits.size}) ==\n")
             resourceHits.forEach { append(it).append('\n') }
-            append("\n== Code (${codeHits.size}")
-            if (codeHits.size > MAX_LINES) append(", first $MAX_LINES shown")
-            append(") ==\n")
-            codeHits.take(MAX_LINES).forEach { append(it).append('\n') }
+            append("\n== Code (${codeHits.size}) ==\n")
+            codeHits.forEach { append(it).append('\n') }
         }
     }
 
