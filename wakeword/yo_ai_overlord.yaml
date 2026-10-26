@@ -1,0 +1,10 @@
+model_name: yo_ai_overlord
+target_phrases:
+  - "yo ai overlord"
+n_samples: 5000
+n_samples_val: 1000
+tts_batch_size: 10
+steps: 30000
+model:
+  model_type: conv_attention
+  model_size: small

@@ -46,7 +46,7 @@ class MainActivity : Activity() {
         root.addView(title, matchWrap())
 
         val description = TextView(this).apply {
-            text = "Stage 3 experimentally attempts to launch ChatGPT Voice after “Hey Jarvis.” The direct launch uses an undocumented ChatGPT activity and may stop working after an app update. For lock-screen voice, ChatGPT may need to be the system Digital assistant, and this app needs Display over other apps permission. If direct launch fails, tap the detection notification. Listening pauses after detection; restart it after your conversation. In ChatGPT Settings > Voice, enable Background conversations if available."
+            text = "Stage 3 experimental assistant handoff. The custom “yo, Ai Overlord” detector runs on-device and requests Android’s configured digital assistant overlay. Android may defer assistant operation until unlock. If the assistant does not open, tap the detection notification. Listening pauses after detection; restart it after your conversation."
             textSize = 16f
             setPadding(0, 20, 0, 20)
         }
@@ -73,14 +73,19 @@ class MainActivity : Activity() {
         val stopButton = Button(this).apply {
             text = "Stop listening"
             setOnClickListener {
-                stopService(Intent(this@MainActivity, WakeWordService::class.java))
-                refreshStatus()
+                // Deliver an explicit stop command so the service can release the
+                // detector, clear its status, and stop itself through one code path.
+                startService(
+                    Intent(this@MainActivity, WakeWordService::class.java)
+                        .setAction(WakeWordService.ACTION_STOP)
+                )
+                statusView.text = "Stopping listener…"
             }
         }
         root.addView(stopButton, matchWrap())
 
         val overlayButton = Button(this).apply {
-            text = "Enable direct Voice launch"
+            text = "Enable assistant launch"
             setOnClickListener {
                 val intent = Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -92,14 +97,14 @@ class MainActivity : Activity() {
         root.addView(overlayButton, matchWrap())
 
         val assistantSetup = TextView(this).apply {
-            text = "For lock-screen Voice capture, try setting ChatGPT as the phone’s Digital assistant: Settings > Apps > Default apps > Digital assistant app. If ChatGPT is not offered there, this route may not work on this device. The direct launch uses an undocumented ChatGPT component and is experimental."
+            text = "The wake trigger requests Android’s configured digital assistant using ACTION_ASSIST, intended to open the same assistant overlay as the power-button gesture. Display over other apps permission is required for this experimental background launch. The wake-word model is a custom candidate and requires real-device false-positive and missed-detection testing."
             textSize = 13f
             setPadding(0, 12, 0, 0)
         }
         root.addView(assistantSetup, matchWrap())
 
         val diagnostics = TextView(this).apply {
-            text = "Diagnostics show microphone preflight results and the confidence score when the detector reports a match. The current detector library does not expose below-threshold scores."
+            text = "Diagnostics now report ONNX model loading, microphone recording state, captured audio frames, inference count, and the latest confidence score. The confidence score updates during listening, including below-threshold results."
             textSize = 13f
             setPadding(0, 24, 0, 0)
         }

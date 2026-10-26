@@ -42,6 +42,7 @@ class FixedOpenWakeWord private constructor(
     private val wakeWordModelSource: ModelSource,
     private val threshold: Float,
     private val debounceMs: Long,
+    private val statusListener: ((String, Boolean) -> Unit)?,
 ) {
 
     /** Pre-trained wake word models bundled with the library. */
@@ -64,6 +65,7 @@ class FixedOpenWakeWord private constructor(
         private var modelSource: ModelSource = ModelSource.BuiltIn(BuiltInModel.HEY_JARVIS)
         private var threshold = 0.5f
         private var debounceMs = 2000L
+        private var statusListener: ((String, Boolean) -> Unit)? = null
 
         /** Use one of the bundled pre-trained models. */
         fun setModel(model: BuiltInModel) = apply {
@@ -98,11 +100,17 @@ class FixedOpenWakeWord private constructor(
             this.debounceMs = ms.coerceAtLeast(0)
         }
 
+        /** Receives detector diagnostics and whether listening is currently healthy. */
+        fun setStatusListener(listener: (String, Boolean) -> Unit) = apply {
+            statusListener = listener
+        }
+
         fun build(): FixedOpenWakeWord = FixedOpenWakeWord(
             context.applicationContext,
             modelSource,
             threshold,
             debounceMs,
+            statusListener,
         )
     }
 
@@ -153,6 +161,8 @@ class FixedOpenWakeWord private constructor(
     private var listener: OnDetectionListener? = null
     private var lastDetectionTime = 0L
     private var predictionCount = 0
+    private var capturedFrameCount = 0L
+    private var lastReportedScore = 0f
 
     private lateinit var rawBuffer: FloatArray
     private var rawWritePos = 0
@@ -180,17 +190,24 @@ class FixedOpenWakeWord private constructor(
         processingThread = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             try {
+                reportStatus("Loading ONNX wake-word models…", true)
                 if (melSpecSession == null) initModels()
                 initBuffers()
+                reportStatus("ONNX models loaded; initializing microphone…", true)
                 if (!initAudioRecord()) {
-                    Log.e(TAG, "Failed to initialize AudioRecord – missing RECORD_AUDIO permission?")
-                    return@Thread
+                    throw IllegalStateException("AudioRecord failed to initialize. Check microphone permission and whether another app is using the microphone.")
                 }
                 audioLoop()
             } catch (e: Exception) {
+                isRunning = false
                 Log.e(TAG, "Error in processing thread", e)
+                reportStatus("Detector failed: ${e.javaClass.simpleName}: ${e.message ?: "no details"}", false)
             } finally {
                 releaseAudioRecord()
+                if (isRunning) {
+                    isRunning = false
+                    reportStatus("Detector stopped unexpectedly; microphone released.", false)
+                }
             }
         }, "FixedOpenWakeWord")
         processingThread?.start()
@@ -269,6 +286,8 @@ class FixedOpenWakeWord private constructor(
         repeat(FEATURE_WINDOW) { featureBuffer.add(FloatArray(EMBEDDING_DIM)) }
 
         predictionCount = 0
+        capturedFrameCount = 0L
+        lastReportedScore = 0f
         lastDetectionTime = 0L
     }
 
@@ -311,12 +330,20 @@ class FixedOpenWakeWord private constructor(
     // ------------------------------------------------------------------
 
     private fun audioLoop() {
-        audioRecord?.startRecording() ?: return
+        val recorder = audioRecord ?: throw IllegalStateException("AudioRecord is missing.")
+        recorder.startRecording()
+        if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            throw IllegalStateException("AudioRecord did not enter recording state.")
+        }
+        reportStatus("Microphone recording confirmed; collecting audio…", true)
         val frame = ShortArray(FRAME_SAMPLES)
 
         while (isRunning) {
             val read = audioRecord?.read(frame, 0, FRAME_SAMPLES) ?: break
+            if (read < 0) throw IllegalStateException("AudioRecord read failed (code ${read}).")
             if (read != FRAME_SAMPLES) continue
+            capturedFrameCount++
+            if (capturedFrameCount % 25L == 0L) reportStatus(diagnosticSummary("Audio capture active"), true)
 
             addToRawBuffer(frame)
             if (rawTotalWritten < FRAME_SAMPLES + MEL_CONTEXT_SAMPLES) continue
@@ -348,6 +375,8 @@ class FixedOpenWakeWord private constructor(
                 for (i in fStart until featureBuffer.size) features.add(featureBuffer[i])
 
                 val score = runWakeWordModel(features)
+                lastReportedScore = score
+                if (predictionCount % 10 == 0) reportStatus(diagnosticSummary("Audio capture and inference active"), true)
                 if (score >= threshold) {
                     val now = System.currentTimeMillis()
                     if (now - lastDetectionTime > debounceMs) {
@@ -358,6 +387,17 @@ class FixedOpenWakeWord private constructor(
                     }
                 }
             }
+        }
+    }
+
+    private fun diagnosticSummary(prefix: String): String =
+        "${prefix}; audio frames=${capturedFrameCount}, inferences=${predictionCount}, latest confidence=${String.format(java.util.Locale.US, "%.3f", lastReportedScore)}, threshold=${String.format(java.util.Locale.US, "%.2f", threshold)}."
+
+    private fun reportStatus(message: String, healthy: Boolean) {
+        try {
+            statusListener?.invoke(message, healthy)
+        } catch (error: Exception) {
+            Log.w(TAG, "Diagnostic callback failed", error)
         }
     }
 

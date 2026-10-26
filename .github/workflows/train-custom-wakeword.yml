@@ -1,0 +1,188 @@
+name: Train and release custom wake phrase test APK
+
+on:
+  push:
+    branches:
+      - fix/in-app-stop-listening
+    paths:
+      - "wakeword/**"
+      - ".github/workflows/train-custom-wakeword.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  train-build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y espeak-ng ffmpeg sox libsndfile1 portaudio19-dev
+
+      - name: Install LiveKit WakeWord training pipeline
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade "livekit-wakeword[train,eval,export] @ git+https://github.com/livekit/livekit-wakeword.git@cdb82b8ebc179b216e1c5bf360dbdc1ccd5288f2"
+
+      - name: Verify LiveKit extraction API compatibility
+        run: |
+          python - <<'PY'
+          import inspect
+          from livekit.wakeword.data.features import run_extraction
+          from livekit.wakeword import cli
+          source = inspect.getsource(cli.run)
+          signature = inspect.signature(run_extraction)
+          print("run_extraction signature:", signature)
+          assert "sess_options" in signature.parameters, signature
+          assert signature.parameters["sess_options"].default is not inspect.Parameter.empty, signature
+          assert "run_extraction(config)" in source, "CLI invocation changed; review API before training"
+          print("LiveKit CLI and feature-extraction API are compatible.")
+          PY
+
+      - name: Download training assets
+        run: livekit-wakeword setup --config wakeword/yo_ai_overlord.yaml
+
+      - name: Train, export, and evaluate
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p training-diagnostics
+          export PYTHONUNBUFFERED=1
+
+          # Stream the trainer output into the Actions log and retain a copy as an artifact.
+          stdbuf -oL -eL livekit-wakeword run wakeword/yo_ai_overlord.yaml 2>&1 | tee training-diagnostics/train.log &
+          trainer_pid=$!
+          started_at=$(date +%s)
+
+          # Emit a heartbeat every minute so a quiet trainer is distinguishable from a dead one.
+          (
+            while kill -0 "$trainer_pid" 2>/dev/null; do
+              now=$(date +%s)
+              elapsed=$((now - started_at))
+              log_bytes=0
+              if [ -f training-diagnostics/train.log ]; then
+                log_bytes=$(stat -c%s training-diagnostics/train.log 2>/dev/null || echo 0)
+              fi
+              echo "::notice title=Wakeword training heartbeat::elapsed_seconds=$elapsed log_bytes=$log_bytes"
+              ps -eo pid,ppid,etime,%cpu,%mem,rss,args --sort=-%cpu | grep -E 'livekit-wakeword|python' | grep -v grep | head -n 8 || true
+              sleep 60
+            done
+          ) &
+          monitor_pid=$!
+
+          wait "$trainer_pid"
+          train_status=$?
+          kill "$monitor_pid" 2>/dev/null || true
+          wait "$monitor_pid" 2>/dev/null || true
+          if [ "$train_status" -ne 0 ]; then
+            echo "::error::Wakeword training process exited with status $train_status"
+            exit "$train_status"
+          fi
+
+          livekit-wakeword eval wakeword/yo_ai_overlord.yaml --model output/yo_ai_overlord/yo_ai_overlord.onnx 2>&1 | tee training-diagnostics/eval.log
+          find output/yo_ai_overlord -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Upload training diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wakeword-training-diagnostics
+          path: training-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verify ONNX model contract and run smoke inference
+        run: |
+          python - <<'PY'
+          import onnxruntime as ort
+          import numpy as np
+          path = "output/yo_ai_overlord/yo_ai_overlord.onnx"
+          session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+          assert len(session.get_inputs()) == 1, session.get_inputs()
+          assert len(session.get_outputs()) == 1, session.get_outputs()
+          inp, out = session.get_inputs()[0], session.get_outputs()[0]
+          assert inp.name == "embeddings", (inp.name, inp.shape)
+          assert out.name == "score", (out.name, out.shape)
+          assert inp.shape[-2:] == [16, 96], inp.shape
+          assert out.shape[-1:] == [1], out.shape
+          scores = session.run(["score"], {"embeddings": np.zeros((1, 16, 96), dtype=np.float32)})[0]
+          assert scores.shape == (1, 1), scores.shape
+          assert np.isfinite(scores).all(), scores
+          print({"input": inp.shape, "output": out.shape, "zero_input_score": scores.tolist()})
+          PY
+
+      - name: Install trained model in Android assets
+        run: |
+          mkdir -p app/src/main/assets/wakeword
+          test -s output/yo_ai_overlord/yo_ai_overlord.onnx
+          cp output/yo_ai_overlord/yo_ai_overlord.onnx app/src/main/assets/wakeword/yo_ai_overlord.onnx
+
+      - name: Build and run Android unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+
+      - name: Prepare release files
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk Android-Wake-Phrase-Service-1.4.0-rc1.apk
+          cat > RELEASE_NOTES.md <<'EOF'
+          Android Wake Phrase Service 1.4.0-rc1 — custom wake phrase test candidate
+
+          Wake phrase: “yo, Ai Overlord” using a custom-trained on-device ONNX classifier.
+          The model was trained with the open-source LiveKit WakeWord pipeline and evaluated in CI.
+          Android unit tests and debug APK build must pass before this release is created.
+
+          This is a test candidate, not a claim of proven real-world accuracy. The owner must test missed detections and false positives on the Samsung Galaxy A15 5G (SM-A156U), Android 16.
+          The system assistant handoff is experimental; Android may defer assistant operation until unlock.
+          Listening stops after detection and must be restarted manually after the conversation.
+
+          Debug-signed APK for sideload testing, not a Play Store production build. If Android reports a signature conflict with an existing installation, uninstall the previous build first.
+          EOF
+
+      - name: Commit the trained model to the PR branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/wakeword/yo_ai_overlord.onnx
+          if ! git diff --cached --quiet; then
+            git commit -m "Add trained yo Ai Overlord ONNX model"
+            git push origin HEAD:fix/in-app-stop-listening
+          fi
+
+      - name: Publish immutable test-candidate release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v1.4.0-rc1
+          APK_NAME: Android-Wake-Phrase-Service-1.4.0-rc1.apk
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Refusing to overwrite an immutable release."
+            exit 1
+          fi
+          gh release create "$TAG" "$APK_NAME" \
+            --target fix/in-app-stop-listening \
+            --title "Android Wake Phrase Service 1.4.0-rc1 — Custom Wake Phrase Test Candidate" \
+            --notes-file RELEASE_NOTES.md \
+            --prerelease
+
+      - name: Upload model and APK build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yo-ai-overlord-test-build
+          path: |
+            output/yo_ai_overlord/yo_ai_overlord.onnx
+            output/yo_ai_overlord/
+            Android-Wake-Phrase-Service-1.4.0-rc1.apk
+          if-no-files-found: error
+          retention-days: 14

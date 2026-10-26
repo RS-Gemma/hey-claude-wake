@@ -14,6 +14,8 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -22,6 +24,7 @@ class WakeWordService : Service() {
     private var detector: FixedOpenWakeWord? = null
     private var lastActionAt = 0L
     private var started = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate() {
         super.onCreate()
@@ -29,6 +32,10 @@ class WakeWordService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopListeningByUser(startId)
+            return START_NOT_STICKY
+        }
         if (started) return START_STICKY
 
         val persistentNotification = buildListeningNotification()
@@ -54,16 +61,27 @@ class WakeWordService : Service() {
                 return START_NOT_STICKY
             }
 
-            setDiagnosticStatus("Microphone check passed; loading patched wake-word detector", listening = true)
+            setDiagnosticStatus("Preflight passed; detector thread is loading models and initializing audio.", listening = true)
             detector = FixedOpenWakeWord.Builder(this)
-                .setModel(FixedOpenWakeWord.BuiltInModel.HEY_JARVIS)
+                .setModelAsset("wakeword/yo_ai_overlord.onnx")
                 // Slightly more sensitive than the original 0.5 threshold.
                 .setThreshold(DETECTION_THRESHOLD)
+                .setStatusListener { status, healthy ->
+                    mainHandler.post {
+                        setDiagnosticStatus(status, listening = healthy)
+                        if (!healthy) {
+                            started = false
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                        }
+                    }
+                }
                 .build()
 
+            started = true
             detector?.start { score ->
                 val now = SystemClock.elapsedRealtime()
-                Log.i(TAG, "Hey Jarvis detection callback; confidence=$score")
+                Log.i(TAG, "Yo, Ai Overlord detection callback; confidence=$score")
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .edit()
                     .putFloat(KEY_LAST_SCORE, score)
@@ -77,18 +95,14 @@ class WakeWordService : Service() {
                     handoffToChatGPTVoice()
                 }
             }
-            started = true
-            setDiagnosticStatus(
-                "Microphone check passed. Patched detector started; say “Hey Jarvis” clearly near the phone.",
-                listening = true
-            )
-            Log.i(TAG, "Patched wake-word detector start requested; threshold=$DETECTION_THRESHOLD")
+            Log.i(TAG, "Wake-word detector worker launched; threshold=$DETECTION_THRESHOLD")
         } catch (error: Exception) {
             Log.e(TAG, "Failed to start wake-word service", error)
             setDiagnosticStatus(
                 "Startup failed: ${error.javaClass.simpleName}: ${error.message ?: "no details"}",
                 listening = false
             )
+            started = false
             detector?.let { runCatching { it.stop() }; runCatching { it.release() } }
             detector = null
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -99,6 +113,27 @@ class WakeWordService : Service() {
         // Let Android recreate the foreground service if the process is reclaimed.
         // Explicit Stop and startup failures still stop the service normally.
         return START_STICKY
+    }
+
+    private fun stopListeningByUser(startId: Int) {
+        Log.i(TAG, "Explicit stop requested from the app")
+        detector?.let { wakeWordDetector ->
+            try {
+                wakeWordDetector.stop()
+            } catch (error: Exception) {
+                Log.w(TAG, "Detector stop failed after explicit stop request", error)
+            }
+            try {
+                wakeWordDetector.release()
+            } catch (error: Exception) {
+                Log.w(TAG, "Detector release failed after explicit stop request", error)
+            }
+        }
+        detector = null
+        started = false
+        setDiagnosticStatus("Stopped by user.", listening = false)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelfResult(startId)
     }
 
     /**
@@ -164,7 +199,7 @@ class WakeWordService : Service() {
         try {
             currentDetector?.stop()
         } catch (error: Exception) {
-            Log.w(TAG, "Detector stop before ChatGPT handoff failed", error)
+            Log.w(TAG, "Detector stop before assistant handoff failed", error)
         }
         try {
             currentDetector?.release()
@@ -174,7 +209,7 @@ class WakeWordService : Service() {
 
         started = false
         setDiagnosticStatus(
-            "ChatGPT Voice handoff attempted. Listening is paused; restart it after the conversation.",
+            "System assistant launch requested. Listening is paused; restart it after the conversation.",
             listening = false
         )
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -190,7 +225,7 @@ class WakeWordService : Service() {
                 .edit()
                 .putString(
                     KEY_DIAGNOSTIC_STATUS,
-                    "ChatGPT Voice did not launch directly. Tap the detection notification; enable Display over other apps to test direct launch."
+                    "System assistant did not launch directly. Tap the detection notification; confirm Display over other apps permission is enabled."
                 )
                 .putBoolean(KEY_LISTENING, false)
                 .apply()
@@ -225,6 +260,7 @@ class WakeWordService : Service() {
         val priorStatus = prefs.getString(KEY_DIAGNOSTIC_STATUS, "") ?: ""
         if (!priorStatus.startsWith("Startup failed:") &&
             !priorStatus.startsWith("Microphone check failed:") &&
+            !priorStatus.startsWith("Detector failed:") &&
             !priorStatus.startsWith("ChatGPT Voice")
         ) {
             setDiagnosticStatus("Not listening", listening = false)
@@ -274,7 +310,7 @@ class WakeWordService : Service() {
         )
         return notificationBuilder(CHANNEL_LISTENING)
             .setContentTitle("Wake Phrase Service is listening")
-            .setContentText("Say “Hey Jarvis” to receive the ChatGPT action.")
+            .setContentText("Say “yo, Ai Overlord” to invoke the system assistant.")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setContentIntent(openApp)
@@ -294,7 +330,7 @@ class WakeWordService : Service() {
         )
         val notification = notificationBuilder(CHANNEL_DETECTED)
             .setContentTitle("Wake phrase detected")
-            .setContentText("If Voice did not open, tap here to open ChatGPT. Listening pauses after detection.")
+            .setContentText("If the assistant did not open, tap here to open ChatGPT. Listening pauses after detection.")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setAutoCancel(true)
             .setContentIntent(openChatGPT)
@@ -318,6 +354,7 @@ class WakeWordService : Service() {
         }
 
     companion object {
+        const val ACTION_STOP = "com.pistolwhip.wakephraseservice.action.STOP"
         const val PREFS_NAME = "wake_phrase_service"
         const val KEY_LISTENING = "is_listening"
         const val KEY_DIAGNOSTIC_STATUS = "diagnostic_status"
