@@ -11,8 +11,10 @@ import java.util.zip.ZipFile
  * deep links, or assistant entry points. Used to discover how to open voice mode directly.
  */
 object ClaudeScanner {
-    private val interesting = Regex("(?i)voice|claude://|claude\\.ai/|deeplink|deep_link|overlay|assist|dictat|speech|talk")
-    private const val MAX_LINES = 600
+    private val interesting = Regex("(?i)voice|://|claude\\.ai|deeplink|deep_link|shortcut|bell|assist|call_?window|launch_?mode|start_")
+    // Class names and method signatures: obfuscated noise that hides the useful keys.
+    private val noise = Regex("^\\[*L[\\w/\$]+;$|^\\(.*\\).+|^com\\.anthropic\\.voice\\.internal|ASSISTANT_|_ASSISTANT_OUTPUT")
+    private const val MAX_LINES = 400
 
     fun scan(context: Context): String {
         val pkg = AssistantLauncher.assistantPackage(context)
@@ -58,7 +60,8 @@ object ClaudeScanner {
     }
 
     private fun keep(s: String): Boolean =
-        s.length in 3..120 && s.none { it.isWhitespace() } && interesting.containsMatchIn(s)
+        s.length in 3..120 && s.none { it.isWhitespace() } && interesting.containsMatchIn(s) &&
+            !noise.containsMatchIn(s)
 
     private fun InputStream.readAll(): ByteArray = readBytes()
 

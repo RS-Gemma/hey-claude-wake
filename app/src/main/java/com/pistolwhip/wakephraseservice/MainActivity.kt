@@ -244,10 +244,10 @@ class MainActivity : Activity() {
             }
         }, matchWrap())
 
-        val extraField = EditText(this).apply { hint = "Switches to try, e.g. start_voice or mode=voice" }
+        val extraField = EditText(this).apply { hint = "Switches to try, e.g. @class=…, @action=…, @data=…, key=value" }
         root.addView(extraField, matchWrap())
         root.addView(Button(this).apply {
-            text = "Try switch (assistant screen)"
+            text = "Try switch"
             setOnClickListener {
                 val intent = Intent(Intent.ACTION_ASSIST)
                     .setPackage(AssistantLauncher.assistantPackage(this@MainActivity))
@@ -257,12 +257,18 @@ class MainActivity : Activity() {
         }, matchWrap())
     }
 
-    /** Parses "key", "key=true", "key=3" or "key=text", comma-separated, into intent extras. */
+    /**
+     * Parses comma-separated "key", "key=true", "key=3" or "key=text" into intent extras.
+     * Special keys: "@class=" targets a Claude activity, "@action=" and "@data=" set those fields.
+     */
     private fun putExtras(intent: Intent, spec: String) {
         for (part in spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
             val key = part.substringBefore('=').trim()
             val value = if ('=' in part) part.substringAfter('=').trim() else "true"
             when {
+                key == "@class" -> intent.setClassName(intent.`package` ?: AssistantLauncher.CLAUDE_PACKAGE, value)
+                key == "@action" -> intent.action = value
+                key == "@data" -> intent.data = Uri.parse(value)
                 value == "true" || value == "false" -> intent.putExtra(key, value.toBoolean())
                 value.toIntOrNull() != null -> intent.putExtra(key, value.toInt())
                 else -> intent.putExtra(key, value)
