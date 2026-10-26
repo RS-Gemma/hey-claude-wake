@@ -109,5 +109,16 @@ object AssistantLauncher {
         } catch (error: PackageManager.NameNotFoundException) {
             append("\n  (package not installed or not visible)")
         }
+        try {
+            @Suppress("DEPRECATION")
+            val info = pm.getPackageInfo(claude, PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS)
+            append("\n\nExported services in $claude:")
+            info.services.orEmpty().filter { it.exported }
+                .forEach { append("\n  ").append(it.name).append(it.permission?.let { p -> " (needs $p)" } ?: "") }
+            append("\n\nExported receivers in $claude:")
+            info.receivers.orEmpty().filter { it.exported }
+                .forEach { append("\n  ").append(it.name).append(it.permission?.let { p -> " (needs $p)" } ?: "") }
+        } catch (error: PackageManager.NameNotFoundException) {
+        }
     }
 }

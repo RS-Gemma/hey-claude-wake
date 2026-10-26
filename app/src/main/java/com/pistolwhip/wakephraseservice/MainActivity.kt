@@ -16,6 +16,7 @@ import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.widget.EditText
+import android.widget.Toast
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.RadioButton
@@ -134,7 +135,7 @@ class MainActivity : Activity() {
                 text = "Test: ${method.label}"
                 setOnClickListener {
                     if (!AssistantLauncher.launch(this@MainActivity, method)) {
-                        statusView.text = "Nothing on this phone handles ${method.label}."
+                        toast("Nothing on this phone handles ${method.label}.")
                     }
                 }
             }, matchWrap())
@@ -244,15 +245,15 @@ class MainActivity : Activity() {
             }
         }, matchWrap())
 
-        val extraField = EditText(this).apply { hint = "Switches to try, e.g. @class=…, @action=…, @data=…, key=value" }
+        val extraField = EditText(this).apply { hint = "Switches to try, e.g. @class=…, @service=…, @action=…, @data=…, key=value" }
         root.addView(extraField, matchWrap())
         root.addView(Button(this).apply {
             text = "Try switch"
             setOnClickListener {
                 val intent = Intent(Intent.ACTION_ASSIST)
                     .setPackage(AssistantLauncher.assistantPackage(this@MainActivity))
-                putExtras(intent, extraField.text.toString())
-                tryLaunch(intent)
+                val isService = putExtras(intent, extraField.text.toString())
+                if (isService) tryStartService(intent) else tryLaunch(intent)
             }
         }, matchWrap())
     }
@@ -261,12 +262,18 @@ class MainActivity : Activity() {
      * Parses comma-separated "key", "key=true", "key=3" or "key=text" into intent extras.
      * Special keys: "@class=" targets a Claude activity, "@action=" and "@data=" set those fields.
      */
-    private fun putExtras(intent: Intent, spec: String) {
+    private fun putExtras(intent: Intent, spec: String): Boolean {
+        var isService = false
         for (part in spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
             val key = part.substringBefore('=').trim()
             val value = if ('=' in part) part.substringAfter('=').trim() else "true"
             when {
                 key == "@class" -> intent.setClassName(intent.`package` ?: AssistantLauncher.CLAUDE_PACKAGE, value)
+                key == "@service" -> {
+                    intent.setClassName(intent.`package` ?: AssistantLauncher.CLAUDE_PACKAGE, value)
+                    intent.action = null
+                    isService = true
+                }
                 key == "@action" -> intent.action = value
                 key == "@data" -> intent.data = Uri.parse(value)
                 value == "true" || value == "false" -> intent.putExtra(key, value.toBoolean())
@@ -274,13 +281,27 @@ class MainActivity : Activity() {
                 else -> intent.putExtra(key, value)
             }
         }
+        return isService
+    }
+
+    private fun tryStartService(intent: Intent) {
+        try {
+            val started = startService(intent)
+            toast(if (started != null) "Service started: ${started.shortClassName}" else "Service not found")
+        } catch (error: Exception) {
+            toast("Service failed: ${error.javaClass.simpleName}: ${error.message}")
+        }
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     private fun tryLaunch(intent: Intent) {
         try {
             startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (error: Exception) {
-            statusView.text = "Launch failed: ${error.javaClass.simpleName}: ${error.message}"
+            toast("Launch failed: ${error.javaClass.simpleName}: ${error.message}")
         }
     }
 

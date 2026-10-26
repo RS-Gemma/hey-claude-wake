@@ -11,9 +11,9 @@ import java.util.zip.ZipFile
  * deep links, or assistant entry points. Used to discover how to open voice mode directly.
  */
 object ClaudeScanner {
-    private val interesting = Regex("(?i)voice|://|claude\\.ai|deeplink|deep_link|shortcut|bell|assist|call_?window|launch_?mode|start_")
+    private val interesting = Regex("(?i)voice|claude://|claude\\.ai|deeplink|deep_link|shortcut|bell|assist|call_?window|launch_?mode|start_")
     // Class names and method signatures: obfuscated noise that hides the useful keys.
-    private val noise = Regex("^\\[*L[\\w/\$]+;$|^\\(.*\\).+|^com\\.anthropic\\.voice\\.internal|ASSISTANT_|_ASSISTANT_OUTPUT")
+    private val noise = Regex("^\\[*L[\\w/\$]+;$|^\\(.*\\).+|^com\\.anthropic\\.voice\\.internal|ASSISTANT_|_ASSISTANT_OUTPUT|schemas\\.android\\.com")
     private const val MAX_LINES = 400
 
     fun scan(context: Context): String {
@@ -23,6 +23,7 @@ object ClaudeScanner {
         val manifestHits = sortedSetOf<String>()
         val codeHits = sortedSetOf<String>()
         val resourceHits = sortedSetOf<String>()
+        val shortcutFiles = StringBuilder()
 
         for (path in apks) {
             ZipFile(path).use { zip ->
@@ -30,14 +31,25 @@ object ClaudeScanner {
                     val name = entry.name
                     when {
                         name == "AndroidManifest.xml" ->
-                            zip.getInputStream(entry).use { manifestStrings(it.readAll()) }
+                            zip.getInputStream(entry).use { stringPool(it.readAll(), 8) }
                                 .filter { keep(it) || it.startsWith("/") }
                                 .forEach { manifestHits.add(it) }
                         // Static launcher shortcuts (e.g. "Start voice") live in res/ XML files.
-                        name.startsWith("res/") && name.endsWith(".xml") ->
-                            zip.getInputStream(entry).use { manifestStrings(it.readAll()) }
-                                .filter { keep(it) }
-                                .forEach { resourceHits.add("$it   [$name]") }
+                        name.startsWith("res/") && name.endsWith(".xml") -> {
+                            val strings = zip.getInputStream(entry).use { stringPool(it.readAll(), 8) }
+                            // Launcher shortcut files: dump every string, they are short.
+                            if ("targetClass" in strings || "shortcutId" in strings) {
+                                shortcutFiles.append("[$name]\n")
+                                strings.forEach { shortcutFiles.append("  ").append(it).append('\n') }
+                            }
+                            strings.filter { keep(it) }.forEach { resourceHits.add("$it   [$name]") }
+                        }
+                        // App text resources: links referenced by shortcuts via @string.
+                        name == "resources.arsc" ->
+                            zip.getInputStream(entry).use { stringPool(it.readAll(), 12) }
+                                .filter { keep(it) || (it.contains("://") && it.length <= 120 && it.none { c -> c.isWhitespace() }) }
+                                .filter { !noise.containsMatchIn(it) }
+                                .forEach { resourceHits.add("$it   [resources.arsc]") }
                         name.matches(Regex("classes\\d*\\.dex")) ->
                             zip.getInputStream(entry).use { dexStrings(it.readAll()) }
                                 .filter { keep(it) }
@@ -50,7 +62,8 @@ object ClaudeScanner {
         return buildString {
             append("Package: $pkg\nAPK files: ${apks.size}\n\n== Manifest (${manifestHits.size}) ==\n")
             manifestHits.forEach { append(it).append('\n') }
-            append("\n== Resource XML (${resourceHits.size}) ==\n")
+            append("\n== Shortcut files ==\n").append(shortcutFiles)
+            append("\n== Resources (${resourceHits.size}) ==\n")
             resourceHits.forEach { append(it).append('\n') }
             append("\n== Code (${codeHits.size}")
             if (codeHits.size > MAX_LINES) append(", first $MAX_LINES shown")
@@ -83,10 +96,9 @@ object ClaudeScanner {
         return out
     }
 
-    /** Reads the string pool of a binary AndroidManifest.xml. */
-    private fun manifestStrings(xml: ByteArray): List<String> {
+    /** Reads the string pool at [pool]: offset 8 in binary XML, 12 in resources.arsc. */
+    private fun stringPool(xml: ByteArray, pool: Int): List<String> {
         val buf = ByteBuffer.wrap(xml).order(ByteOrder.LITTLE_ENDIAN)
-        val pool = 8 // String pool chunk follows the 8-byte file header.
         if (xml.size < 32 || buf.getShort(pool).toInt() != 0x0001) return emptyList()
         val headerSize = buf.getShort(pool + 2).toInt()
         val count = buf.getInt(pool + 8)
