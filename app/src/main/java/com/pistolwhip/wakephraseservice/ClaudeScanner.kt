@@ -20,6 +20,7 @@ object ClaudeScanner {
         val apks = listOf(info.sourceDir) + info.splitSourceDirs.orEmpty()
         val manifestHits = sortedSetOf<String>()
         val codeHits = sortedSetOf<String>()
+        val resourceHits = sortedSetOf<String>()
 
         for (path in apks) {
             ZipFile(path).use { zip ->
@@ -30,6 +31,11 @@ object ClaudeScanner {
                             zip.getInputStream(entry).use { manifestStrings(it.readAll()) }
                                 .filter { keep(it) || it.startsWith("/") }
                                 .forEach { manifestHits.add(it) }
+                        // Static launcher shortcuts (e.g. "Start voice") live in res/ XML files.
+                        name.startsWith("res/") && name.endsWith(".xml") ->
+                            zip.getInputStream(entry).use { manifestStrings(it.readAll()) }
+                                .filter { keep(it) }
+                                .forEach { resourceHits.add("$it   [$name]") }
                         name.matches(Regex("classes\\d*\\.dex")) ->
                             zip.getInputStream(entry).use { dexStrings(it.readAll()) }
                                 .filter { keep(it) }
@@ -42,6 +48,8 @@ object ClaudeScanner {
         return buildString {
             append("Package: $pkg\nAPK files: ${apks.size}\n\n== Manifest (${manifestHits.size}) ==\n")
             manifestHits.forEach { append(it).append('\n') }
+            append("\n== Resource XML (${resourceHits.size}) ==\n")
+            resourceHits.forEach { append(it).append('\n') }
             append("\n== Code (${codeHits.size}")
             if (codeHits.size > MAX_LINES) append(", first $MAX_LINES shown")
             append(") ==\n")
@@ -76,7 +84,7 @@ object ClaudeScanner {
     private fun manifestStrings(xml: ByteArray): List<String> {
         val buf = ByteBuffer.wrap(xml).order(ByteOrder.LITTLE_ENDIAN)
         val pool = 8 // String pool chunk follows the 8-byte file header.
-        if (buf.getShort(pool).toInt() != 0x0001) return emptyList()
+        if (xml.size < 32 || buf.getShort(pool).toInt() != 0x0001) return emptyList()
         val headerSize = buf.getShort(pool + 2).toInt()
         val count = buf.getInt(pool + 8)
         val utf8 = buf.getInt(pool + 16) and 0x100 != 0
