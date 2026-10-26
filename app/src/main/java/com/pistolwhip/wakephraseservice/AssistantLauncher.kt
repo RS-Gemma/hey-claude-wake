@@ -21,7 +21,11 @@ object AssistantLauncher {
 
     enum class Method(val label: String, val shellCommand: String? = null) {
         SHIZUKU_SHOW("Shizuku: cmd voiceinteraction show", "cmd voiceinteraction show"),
-        SHIZUKU_KEY_ASSIST("Shizuku: assistant key", "input keyevent KEYCODE_ASSIST"),
+        // Wake the screen first: the assistant key is ignored while the screen is off.
+        SHIZUKU_KEY_ASSIST(
+            "Shizuku: assistant key",
+            "input keyevent KEYCODE_WAKEUP; sleep 0.3; input keyevent KEYCODE_ASSIST"
+        ),
         SHIZUKU_KEY_VOICE_ASSIST("Shizuku: voice assistant key", "input keyevent KEYCODE_VOICE_ASSIST"),
         ASSIST("ACTION_ASSIST (system default assistant)"),
         VOICE_ASSIST("ACTION_VOICE_ASSIST"),

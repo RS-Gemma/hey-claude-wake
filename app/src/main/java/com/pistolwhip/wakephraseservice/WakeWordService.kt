@@ -23,6 +23,7 @@ import android.util.Log
 class WakeWordService : Service() {
     private var detector: FixedOpenWakeWord? = null
     private var lastActionAt = 0L
+    private var listeningSince = 0L
     private var started = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -79,8 +80,14 @@ class WakeWordService : Service() {
                 .build()
 
             started = true
+            listeningSince = SystemClock.elapsedRealtime()
             detector?.start { score ->
                 val now = SystemClock.elapsedRealtime()
+                // The detector emits unreliable scores while its audio window first fills.
+                if (now - listeningSince < WARMUP_MS) {
+                    Log.i(TAG, "Ignoring detection during warm-up; confidence=$score")
+                    return@start
+                }
                 Log.i(TAG, "Hey Jarvis detection callback; confidence=$score")
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .edit()
@@ -380,5 +387,6 @@ class WakeWordService : Service() {
         private const val REQUEST_OPEN_ASSISTANT = 2002
         private const val REQUEST_STOP = 2003
         private const val ACTION_COOLDOWN_MS = 8000L
+        private const val WARMUP_MS = 2000L
     }
 }
