@@ -13,6 +13,9 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
 import android.app.NotificationManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.EditText
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.RadioButton
@@ -154,6 +157,8 @@ class MainActivity : Activity() {
         }
         root.addView(methodGroup, matchWrap())
 
+        addVoiceSwitchFinder(root)
+
         root.addView(TextView(this).apply {
             text = "Diagnostics"
             textSize = 20f
@@ -190,6 +195,87 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         statusHandler.removeCallbacks(statusRefresh)
         super.onDestroy()
+    }
+
+    private fun addVoiceSwitchFinder(root: LinearLayout) {
+        root.addView(TextView(this).apply {
+            text = "Find Claude's voice switch"
+            textSize = 20f
+            setPadding(0, 32, 0, 8)
+        }, matchWrap())
+
+        val scanView = TextView(this).apply {
+            textSize = 11f
+            setTextIsSelectable(true)
+        }
+        root.addView(Button(this).apply {
+            text = "Scan Claude app"
+            setOnClickListener {
+                scanView.text = "Scanning… (can take ~30 seconds)"
+                Thread {
+                    val result = try {
+                        ClaudeScanner.scan(this@MainActivity)
+                    } catch (error: Throwable) {
+                        "Scan failed: ${error.javaClass.simpleName}: ${error.message}"
+                    }
+                    runOnUiThread { scanView.text = result }
+                }.start()
+            }
+        }, matchWrap())
+        root.addView(Button(this).apply {
+            text = "Copy scan result"
+            setOnClickListener {
+                getSystemService(ClipboardManager::class.java)
+                    .setPrimaryClip(ClipData.newPlainText("Claude scan", scanView.text))
+                statusView.text = "Scan result copied."
+            }
+        }, matchWrap())
+        root.addView(scanView, matchWrap())
+
+        val linkField = EditText(this).apply { hint = "Link to try, e.g. claude://…" }
+        root.addView(linkField, matchWrap())
+        root.addView(Button(this).apply {
+            text = "Try link"
+            setOnClickListener {
+                tryLaunch(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(linkField.text.toString().trim()))
+                        .setPackage(AssistantLauncher.assistantPackage(this@MainActivity))
+                )
+            }
+        }, matchWrap())
+
+        val extraField = EditText(this).apply { hint = "Switches to try, e.g. start_voice or mode=voice" }
+        root.addView(extraField, matchWrap())
+        root.addView(Button(this).apply {
+            text = "Try switch (assistant screen)"
+            setOnClickListener {
+                val intent = Intent(Intent.ACTION_ASSIST)
+                    .setPackage(AssistantLauncher.assistantPackage(this@MainActivity))
+                putExtras(intent, extraField.text.toString())
+                tryLaunch(intent)
+            }
+        }, matchWrap())
+    }
+
+    /** Parses "key", "key=true", "key=3" or "key=text", comma-separated, into intent extras. */
+    private fun putExtras(intent: Intent, spec: String) {
+        for (part in spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+            val key = part.substringBefore('=').trim()
+            val value = if ('=' in part) part.substringAfter('=').trim() else "true"
+            when {
+                value == "true" || value == "false" -> intent.putExtra(key, value.toBoolean())
+                value.toIntOrNull() != null -> intent.putExtra(key, value.toInt())
+                else -> intent.putExtra(key, value)
+            }
+        }
+    }
+
+    private fun tryLaunch(intent: Intent) {
+        try {
+            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (error: Exception) {
+            statusView.text = "Launch failed: ${error.javaClass.simpleName}: ${error.message}"
+        }
     }
 
     private fun buildDiagnostics(): String = buildString {
