@@ -5,11 +5,16 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.KeyguardManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
@@ -27,6 +32,13 @@ class WakeWordService : Service() {
     private var started = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // Handoff state: paused while the assistant has the microphone, then resumed automatically.
+    private var paused = false
+    private var pausedAt = 0L
+    private var sawAssistantRecording = false
+    private var quietSince = 0L
+    private var unlockReceiver: BroadcastReceiver? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
@@ -38,6 +50,10 @@ class WakeWordService : Service() {
             return START_NOT_STICKY
         }
         if (started) return START_STICKY
+        if (paused) {
+            resumeListening()
+            return START_STICKY
+        }
 
         val persistentNotification = buildListeningNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -50,6 +66,13 @@ class WakeWordService : Service() {
             startForeground(LISTENING_NOTIFICATION_ID, persistentNotification)
         }
 
+        // Let Android recreate the foreground service if the process is reclaimed.
+        // Explicit Stop and startup failures still stop the service normally.
+        return if (startDetector()) START_STICKY else START_NOT_STICKY
+    }
+
+    /** Starts the microphone and wake-word detector; on failure stops the service. */
+    private fun startDetector(): Boolean {
         setDiagnosticStatus("Starting microphone and wake-word detector", listening = true)
 
         try {
@@ -59,7 +82,7 @@ class WakeWordService : Service() {
                 setDiagnosticStatus(micResult, listening = false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
-                return START_NOT_STICKY
+                return false
             }
 
             setDiagnosticStatus("Preflight passed; detector thread is loading models and initializing audio.", listening = true)
@@ -113,12 +136,9 @@ class WakeWordService : Service() {
             detector = null
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            return START_NOT_STICKY
+            return false
         }
-
-        // Let Android recreate the foreground service if the process is reclaimed.
-        // Explicit Stop and startup failures still stop the service normally.
-        return START_STICKY
+        return true
     }
 
     private fun stopListeningByUser(startId: Int) {
@@ -137,6 +157,7 @@ class WakeWordService : Service() {
         }
         detector = null
         started = false
+        endPause()
         setDiagnosticStatus("Stopped by user.", listening = false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelfResult(startId)
@@ -196,8 +217,9 @@ class WakeWordService : Service() {
 
     /**
      * Release the wake-word microphone before handing control to the assistant, which needs
-     * the microphone for voice mode. The detection notification remains as a tap fallback.
-     * Listening stops after a detection and must be restarted manually.
+     * the microphone for voice mode. The service stays in the foreground, paused, and resumes
+     * listening once the assistant stops recording. The detection notification is shown only
+     * when the launch fails.
      */
     private fun handoffToAssistant() {
         val currentDetector = detector
@@ -212,15 +234,10 @@ class WakeWordService : Service() {
         } catch (error: Exception) {
             Log.w(TAG, "Detector release before assistant handoff failed", error)
         }
-
         started = false
-        setDiagnosticStatus(
-            "System assistant launch requested. Listening is paused; restart it after the conversation.",
-            listening = false
-        )
-        stopForeground(STOP_FOREGROUND_REMOVE)
 
         val method = AssistantLauncher.selectedMethod(this)
+        val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
         // Shizuku methods run as the shell and need no overlay permission; intent methods
         // need it to start an activity from the background.
         val launched = if (method.shellCommand != null || Settings.canDrawOverlays(this)) {
@@ -231,16 +248,96 @@ class WakeWordService : Service() {
         }
         if (!launched) {
             showDetectedNotification()
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit()
-                .putString(
-                    KEY_DIAGNOSTIC_STATUS,
-                    "System assistant did not launch directly. Tap the detection notification; check Shizuku is running, or that Display over other apps is enabled."
-                )
-                .putBoolean(KEY_LISTENING, false)
-                .apply()
+            setDiagnosticStatus(
+                "System assistant did not launch directly. Tap the detection notification; check Shizuku is running, or that Display over other apps is enabled.",
+                listening = false
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
         }
-        stopSelf()
+
+        paused = true
+        pausedAt = SystemClock.elapsedRealtime()
+        sawAssistantRecording = false
+        quietSince = 0L
+        // The assistant refuses to talk on the lock screen; open it again once the user unlocks.
+        if (locked) waitForUnlock(method)
+        updateListeningNotification("Paused while the assistant is listening")
+        setDiagnosticStatus(
+            if (locked) "Assistant requested on lock screen; will reopen it after unlock."
+            else "Assistant opened; listening resumes when the conversation ends.",
+            listening = true
+        )
+        mainHandler.postDelayed(resumeMonitor, MONITOR_INTERVAL_MS)
+    }
+
+    /** Polls the microphone; resumes listening once the assistant has stopped recording. */
+    private val resumeMonitor = object : Runnable {
+        override fun run() {
+            if (!paused) return
+            val now = SystemClock.elapsedRealtime()
+            val recording = getSystemService(AudioManager::class.java)
+                .activeRecordingConfigurations.isNotEmpty()
+            if (recording) {
+                sawAssistantRecording = true
+                quietSince = 0L
+            } else if (quietSince == 0L) {
+                quietSince = now
+            }
+            val resume = when {
+                // Safety net in case some other app keeps the microphone busy indefinitely.
+                now - pausedAt >= MAX_PAUSE_MS -> true
+                recording -> false
+                sawAssistantRecording -> now - quietSince >= RESUME_QUIET_MS
+                unlockReceiver != null -> now - pausedAt >= UNLOCK_WAIT_MS
+                else -> now - pausedAt >= NO_SESSION_TIMEOUT_MS
+            }
+            if (resume) resumeListening() else mainHandler.postDelayed(this, MONITOR_INTERVAL_MS)
+        }
+    }
+
+    private fun waitForUnlock(method: AssistantLauncher.Method) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                unregisterUnlockReceiver()
+                if (paused && SystemClock.elapsedRealtime() - pausedAt < UNLOCK_WAIT_MS) {
+                    Log.i(TAG, "Unlocked after wake phrase; reopening assistant")
+                    pausedAt = SystemClock.elapsedRealtime()
+                    AssistantLauncher.launch(this@WakeWordService, method)
+                }
+            }
+        }
+        unlockReceiver = receiver
+        val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun unregisterUnlockReceiver() {
+        unlockReceiver?.let { runCatching { unregisterReceiver(it) } }
+        unlockReceiver = null
+    }
+
+    private fun endPause() {
+        paused = false
+        mainHandler.removeCallbacks(resumeMonitor)
+        unregisterUnlockReceiver()
+    }
+
+    private fun resumeListening() {
+        Log.i(TAG, "Resuming wake-word listening after assistant handoff")
+        endPause()
+        updateListeningNotification("Say “Hey Jarvis” to open the assistant.")
+        startDetector()
+    }
+
+    private fun updateListeningNotification(text: String) {
+        getSystemService(NotificationManager::class.java)
+            .notify(LISTENING_NOTIFICATION_ID, buildListeningNotification(text))
     }
 
     private fun setDiagnosticStatus(status: String, listening: Boolean) {
@@ -252,6 +349,7 @@ class WakeWordService : Service() {
     }
 
     override fun onDestroy() {
+        endPause()
         detector?.let { wakeWordDetector ->
             try {
                 wakeWordDetector.stop()
@@ -305,7 +403,9 @@ class WakeWordService : Service() {
         )
     }
 
-    private fun buildListeningNotification(): Notification {
+    private fun buildListeningNotification(
+        text: String = "Say “Hey Jarvis” to open the assistant."
+    ): Notification {
         val openApp = PendingIntent.getActivity(
             this,
             REQUEST_OPEN_APP,
@@ -320,7 +420,7 @@ class WakeWordService : Service() {
         )
         return notificationBuilder(CHANNEL_LISTENING)
             .setContentTitle("Wake Phrase Service is listening")
-            .setContentText("Say “Hey Jarvis” to open the assistant.")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setContentIntent(openApp)
@@ -388,5 +488,10 @@ class WakeWordService : Service() {
         private const val REQUEST_STOP = 2003
         private const val ACTION_COOLDOWN_MS = 8000L
         private const val WARMUP_MS = 2000L
+        private const val MONITOR_INTERVAL_MS = 1000L
+        private const val RESUME_QUIET_MS = 3000L
+        private const val UNLOCK_WAIT_MS = 30_000L
+        private const val NO_SESSION_TIMEOUT_MS = 15_000L
+        private const val MAX_PAUSE_MS = 10 * 60_000L
     }
 }
