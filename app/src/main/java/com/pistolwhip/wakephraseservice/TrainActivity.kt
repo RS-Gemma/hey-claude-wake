@@ -21,7 +21,7 @@ import android.widget.TextView
 class TrainActivity : Activity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var phrases: MutableList<PersonalPhrase>
-    private var background: List<FloatArray> = emptyList()
+    private var backgroundSpeech: List<FloatArray> = emptyList()
     private var recorder: FixedOpenWakeWord? = null
     private var micReady = false
     private var wasListening = false
@@ -36,7 +36,7 @@ class TrainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         phrases = PersonalPhrases.load(this)
-        background = PersonalPhrases.loadBackground(this)
+        backgroundSpeech = PersonalPhrases.loadBackground(this)
 
         wasListening = getSharedPreferences(WakeWordService.PREFS_NAME, MODE_PRIVATE)
             .getBoolean(WakeWordService.KEY_LISTENING, false)
@@ -82,9 +82,9 @@ class TrainActivity : Activity() {
             text = "Record 20 s of normal talking"
             setOnClickListener {
                 record(PersonalPhrases.BACKGROUND_FRAMES, "Talk normally for 20 seconds (don't say the wake phrases)…") { frames ->
-                    background = frames.map { it.first }
-                    PersonalPhrases.saveBackground(this@TrainActivity, background)
-                    phrases.forEach { PersonalPhrases.calibrate(it, background) }
+                    backgroundSpeech = frames.map { it.first }
+                    PersonalPhrases.saveBackground(this@TrainActivity, backgroundSpeech)
+                    phrases.forEach { PersonalPhrases.calibrate(it, backgroundSpeech) }
                     PersonalPhrases.save(this@TrainActivity, phrases)
                     backgroundInfo.text = backgroundText()
                     statusView.text = "Normal talking recorded; thresholds updated."
@@ -214,7 +214,7 @@ class TrainActivity : Activity() {
                             return@record
                         }
                         phrase.templates.add(template)
-                        PersonalPhrases.calibrate(phrase, background)
+                        PersonalPhrases.calibrate(phrase, backgroundSpeech)
                         PersonalPhrases.save(this@TrainActivity, phrases)
                         statusView.text = "Sample saved for “${phrase.label}”."
                         renderPhrases()
@@ -226,7 +226,7 @@ class TrainActivity : Activity() {
                 isEnabled = phrase.templates.isNotEmpty()
                 setOnClickListener {
                     phrase.templates.clear()
-                    PersonalPhrases.calibrate(phrase, background)
+                    PersonalPhrases.calibrate(phrase, backgroundSpeech)
                     PersonalPhrases.save(this@TrainActivity, phrases)
                     renderPhrases()
                 }
@@ -235,7 +235,7 @@ class TrainActivity : Activity() {
     }
 
     private fun backgroundText(): String =
-        if (background.isEmpty()) "Not recorded yet." else "Recorded (${background.size} frames). Record again to replace."
+        if (backgroundSpeech.isEmpty()) "Not recorded yet." else "Recorded (${backgroundSpeech.size} frames). Record again to replace."
 
     private fun matchWrap(): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
