@@ -37,6 +37,41 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TrainActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ToggleActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <receiver
+            android:name=".ToggleWidgetProvider"
+            android:exported="true"
+            android:label="Hey Claude listening">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/toggle_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".ListeningTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:label="Hey Claude"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".WakeWordService"
             android:exported="false"

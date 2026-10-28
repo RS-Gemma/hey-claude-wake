@@ -20,7 +20,11 @@ import android.provider.MediaStore
 import android.view.WindowInsets
 import android.widget.EditText
 import android.widget.Toast
+import android.content.res.ColorStateList
+import android.os.SystemClock
 import android.widget.Button
+import android.widget.CheckBox
+import android.widget.Switch
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -33,6 +37,9 @@ import java.util.Locale
 class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var diagnosticsView: TextView
+    private lateinit var listeningSwitch: Switch
+    private var syncingSwitch = false
+    private var switchTouchedAt = 0L
     private val statusHandler = Handler(Looper.getMainLooper())
     private val statusRefresh = object : Runnable {
         override fun run() {
@@ -58,7 +65,7 @@ class MainActivity : Activity() {
         root.addView(title, matchWrap())
 
         val description = TextView(this).apply {
-            text = "Say “Hey Jarvis” to open your default digital assistant. Detection runs on-device. Listening pauses after detection; restart it after your conversation. If the assistant does not open, tap the detection notification."
+            text = "Say a wake phrase (“Hey Jarvis”, or your own trained phrases) to open your default digital assistant. Detection runs on-device. Listening pauses during the conversation and resumes by itself. If the assistant does not open, tap the detection notification."
             textSize = 16f
             setPadding(0, 20, 0, 20)
         }
@@ -70,31 +77,46 @@ class MainActivity : Activity() {
         }
         root.addView(statusView, matchWrap())
 
-        val startButton = Button(this).apply {
-            text = "Start listening"
-            setOnClickListener {
-                if (permissionsGranted()) {
-                    startListening()
+        // One control for listening; it follows the real state, also when changed from the
+        // home-screen widget, the Quick Settings tile, or by the service itself.
+        listeningSwitch = Switch(this).apply {
+            text = "Listening"
+            textSize = 20f
+            val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+            thumbTintList = ColorStateList(states, intArrayOf(0xFF2E7D32.toInt(), 0xFF9E9E9E.toInt()))
+            trackTintList = ColorStateList(states, intArrayOf(0xFFA5D6A7.toInt(), 0xFFBDBDBD.toInt()))
+            setOnCheckedChangeListener { _, checked ->
+                if (syncingSwitch) return@setOnCheckedChangeListener
+                switchTouchedAt = SystemClock.elapsedRealtime()
+                if (checked) {
+                    if (permissionsGranted()) startListening() else requestNeededPermissions()
                 } else {
-                    requestNeededPermissions()
+                    // Deliver an explicit stop command so the service can release the
+                    // detector, clear its status, and stop itself through one code path.
+                    startService(
+                        Intent(this@MainActivity, WakeWordService::class.java)
+                            .setAction(WakeWordService.ACTION_STOP)
+                    )
+                    statusView.text = "Stopping listener…"
                 }
             }
         }
-        root.addView(startButton, matchWrap())
+        root.addView(listeningSwitch, matchWrap())
 
-        val stopButton = Button(this).apply {
-            text = "Stop listening"
-            setOnClickListener {
-                // Deliver an explicit stop command so the service can release the
-                // detector, clear its status, and stop itself through one code path.
-                startService(
-                    Intent(this@MainActivity, WakeWordService::class.java)
-                        .setAction(WakeWordService.ACTION_STOP)
-                )
-                statusView.text = "Stopping listener…"
+        root.addView(CheckBox(this).apply {
+            text = "Use “Hey Jarvis”"
+            isChecked = getSharedPreferences(WakeWordService.PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(WakeWordService.KEY_JARVIS_ENABLED, true)
+            setOnCheckedChangeListener { _, checked ->
+                getSharedPreferences(WakeWordService.PREFS_NAME, MODE_PRIVATE)
+                    .edit().putBoolean(WakeWordService.KEY_JARVIS_ENABLED, checked).apply()
             }
-        }
-        root.addView(stopButton, matchWrap())
+        }, matchWrap())
+
+        root.addView(Button(this).apply {
+            text = "Train personal phrases (Hey Claude, Hey buddy)"
+            setOnClickListener { startActivity(Intent(this@MainActivity, TrainActivity::class.java)) }
+        }, matchWrap())
 
         val overlayButton = Button(this).apply {
             text = "Allow display over other apps (needed for wake launch)"
@@ -180,7 +202,7 @@ class MainActivity : Activity() {
         root.addView(diagnosticsView, matchWrap())
 
         root.addView(TextView(this).apply {
-            text = "Wake-word audio is processed on-device. Display over other apps is used only to open the assistant when the wake phrase is detected. Wake phrase model: openWakeWord “Hey Jarvis” (CC BY-NC-SA 4.0, non-commercial)."
+            text = "Wake-word audio is processed on-device. Display over other apps is used only to open the assistant when the wake phrase is detected. Wake phrase models: openWakeWord “Hey Jarvis” (CC BY-NC-SA 4.0, non-commercial); personal phrases are your own recordings, stored only on this phone."
             textSize = 13f
             setPadding(0, 24, 0, 0)
         }, matchWrap())
@@ -435,6 +457,7 @@ class MainActivity : Activity() {
             startListening()
         } else if (requestCode == REQUEST_PERMISSIONS) {
             statusView.text = "Microphone and notification permissions are required to listen and show the action."
+            setSwitch(false)
         }
     }
 
@@ -453,31 +476,33 @@ class MainActivity : Activity() {
         val listening = prefs.getBoolean(WakeWordService.KEY_LISTENING, false)
         val diagnostic = prefs.getString(WakeWordService.KEY_DIAGNOSTIC_STATUS, null)
             ?: if (listening) "Detector starting" else "Not listening"
-        val lastScore = if (prefs.contains(WakeWordService.KEY_LAST_SCORE)) {
-            prefs.getFloat(WakeWordService.KEY_LAST_SCORE, 0f)
-        } else {
-            null
-        }
+        val lastPhrase = prefs.getString(WakeWordService.KEY_LAST_PHRASE, null)
         val lastDetectionAt = prefs.getLong(WakeWordService.KEY_LAST_DETECTION_AT, 0L)
 
         val details = buildString {
-            append(if (listening) "Status: active\n" else "Status: inactive\n")
             append(diagnostic)
-            if (lastScore != null) {
-                append("\nLast confidence score: ")
-                append(String.format(Locale.US, "%.3f", lastScore))
-                if (lastDetectionAt > 0L) {
-                    append(" (")
-                    append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(lastDetectionAt)))
-                    append(")")
-                }
+            if (lastPhrase != null && lastDetectionAt > 0L) {
+                append("\nLast heard: ")
+                append(lastPhrase)
+                append(" at ")
+                append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(lastDetectionAt)))
             }
         }
         statusView.text = details
+        // Give the service a moment to start or stop before following its state again.
+        if (SystemClock.elapsedRealtime() - switchTouchedAt > SWITCH_SETTLE_MS) setSwitch(listening)
+    }
+
+    private fun setSwitch(checked: Boolean) {
+        if (!::listeningSwitch.isInitialized || listeningSwitch.isChecked == checked) return
+        syncingSwitch = true
+        listeningSwitch.isChecked = checked
+        syncingSwitch = false
     }
 
     companion object {
         private const val REQUEST_PERMISSIONS = 10
+        private const val SWITCH_SETTLE_MS = 3000L
         private const val STATUS_REFRESH_MS = 1000L
     }
 }

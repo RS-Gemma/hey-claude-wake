@@ -43,6 +43,7 @@ class FixedOpenWakeWord private constructor(
     private val threshold: Float,
     private val debounceMs: Long,
     private val statusListener: ((String, Boolean) -> Unit)?,
+    private val embeddingListener: ((FloatArray, Float) -> Unit)?,
 ) {
 
     /** Pre-trained wake word models bundled with the library. */
@@ -66,6 +67,7 @@ class FixedOpenWakeWord private constructor(
         private var threshold = 0.5f
         private var debounceMs = 2000L
         private var statusListener: ((String, Boolean) -> Unit)? = null
+        private var embeddingListener: ((FloatArray, Float) -> Unit)? = null
 
         /** Use one of the bundled pre-trained models. */
         fun setModel(model: BuiltInModel) = apply {
@@ -105,12 +107,21 @@ class FixedOpenWakeWord private constructor(
             statusListener = listener
         }
 
+        /**
+         * Receives every new speech embedding (one per 80 ms) and the RMS level of the newest
+         * 80 ms of audio, on the processing thread. Used for personal phrase matching.
+         */
+        fun setEmbeddingListener(listener: (FloatArray, Float) -> Unit) = apply {
+            embeddingListener = listener
+        }
+
         fun build(): FixedOpenWakeWord = FixedOpenWakeWord(
             context.applicationContext,
             modelSource,
             threshold,
             debounceMs,
             statusListener,
+            embeddingListener,
         )
     }
 
@@ -363,6 +374,15 @@ class FixedOpenWakeWord private constructor(
 
                 val embedding = computeEmbedding(melWindow) ?: continue
                 featureBuffer.add(embedding)
+                embeddingListener?.let { notify ->
+                    var sumSquares = 0.0
+                    for (sample in frame) sumSquares += sample.toDouble() * sample
+                    try {
+                        notify(embedding, kotlin.math.sqrt(sumSquares / frame.size).toFloat())
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Embedding listener failed", error)
+                    }
+                }
                 while (featureBuffer.size > FEATURE_BUFFER_MAX) featureBuffer.removeAt(0)
             }
 

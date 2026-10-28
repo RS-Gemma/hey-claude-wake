@@ -86,6 +86,7 @@ class WakeWordService : Service() {
             }
 
             setDiagnosticStatus("Preflight passed; detector thread is loading models and initializing audio.", listening = true)
+            val personal = PersonalMatcher(PersonalPhrases.load(this))
             detector = FixedOpenWakeWord.Builder(this)
                 .setModel(FixedOpenWakeWord.BuiltInModel.HEY_JARVIS)
                 // Slightly more sensitive than the original 0.5 threshold.
@@ -100,28 +101,18 @@ class WakeWordService : Service() {
                         }
                     }
                 }
+                .setEmbeddingListener { embedding, _ ->
+                    personal.process(embedding)?.let { (phrase, distance) ->
+                        mainHandler.post { onWakePhrase(phrase.label, "match distance %.3f".format(distance)) }
+                    }
+                }
                 .build()
 
             started = true
             listeningSince = SystemClock.elapsedRealtime()
             detector?.start { score ->
-                val now = SystemClock.elapsedRealtime()
-                // The detector emits unreliable scores while its audio window first fills.
-                if (now - listeningSince < WARMUP_MS) {
-                    Log.i(TAG, "Ignoring detection during warm-up; confidence=$score")
-                    return@start
-                }
-                Log.i(TAG, "Hey Jarvis detection callback; confidence=$score")
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit()
-                    .putFloat(KEY_LAST_SCORE, score)
-                    .putLong(KEY_LAST_DETECTION_AT, System.currentTimeMillis())
-                    .putString(KEY_DIAGNOSTIC_STATUS, "Wake phrase detected; confidence %.3f".format(score))
-                    .apply()
-
-                if (now - lastActionAt >= ACTION_COOLDOWN_MS) {
-                    lastActionAt = now
-                    handoffToAssistant()
+                if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_JARVIS_ENABLED, true)) {
+                    onWakePhrase("Hey Jarvis", "confidence %.3f".format(score))
                 }
             }
             Log.i(TAG, "Wake-word detector worker launched; threshold=$DETECTION_THRESHOLD")
@@ -212,6 +203,29 @@ class WakeWordService : Service() {
         } finally {
             try { recorder?.stop() } catch (_: Exception) {}
             try { recorder?.release() } catch (_: Exception) {}
+        }
+    }
+
+    /** Called on the main thread when any wake phrase is heard. */
+    private fun onWakePhrase(phrase: String, detail: String) {
+        if (!started) return
+        val now = SystemClock.elapsedRealtime()
+        // The detector emits unreliable output while its audio window first fills.
+        if (now - listeningSince < WARMUP_MS) {
+            Log.i(TAG, "Ignoring $phrase during warm-up; $detail")
+            return
+        }
+        Log.i(TAG, "$phrase detected; $detail")
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_LAST_DETECTION_AT, System.currentTimeMillis())
+            .putString(KEY_LAST_PHRASE, "$phrase ($detail)")
+            .putString(KEY_DIAGNOSTIC_STATUS, "Wake phrase detected: $phrase ($detail)")
+            .apply()
+
+        if (now - lastActionAt >= ACTION_COOLDOWN_MS) {
+            lastActionAt = now
+            handoffToAssistant()
         }
     }
 
@@ -331,7 +345,7 @@ class WakeWordService : Service() {
     private fun resumeListening() {
         Log.i(TAG, "Resuming wake-word listening after assistant handoff")
         endPause()
-        updateListeningNotification("Say “Hey Jarvis” to open the assistant.")
+        updateListeningNotification("Say a wake phrase to open the assistant.")
         startDetector()
     }
 
@@ -341,11 +355,19 @@ class WakeWordService : Service() {
     }
 
     private fun setDiagnosticStatus(status: String, listening: Boolean) {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val changed = prefs.getBoolean(KEY_LISTENING, false) != listening
+        prefs.edit()
             .putBoolean(KEY_LISTENING, listening)
             .putString(KEY_DIAGNOSTIC_STATUS, status)
             .apply()
+        if (changed) publishListeningState()
+    }
+
+    /** Updates the home-screen widget and Quick Settings tile. */
+    private fun publishListeningState() {
+        ToggleWidgetProvider.refresh(this)
+        ListeningTileService.refresh(this)
     }
 
     override fun onDestroy() {
@@ -375,6 +397,7 @@ class WakeWordService : Service() {
         } else {
             prefs.edit().putBoolean(KEY_LISTENING, false).apply()
         }
+        publishListeningState()
         super.onDestroy()
     }
 
@@ -404,7 +427,7 @@ class WakeWordService : Service() {
     }
 
     private fun buildListeningNotification(
-        text: String = "Say “Hey Jarvis” to open the assistant."
+        text: String = "Say a wake phrase to open the assistant."
     ): Notification {
         val openApp = PendingIntent.getActivity(
             this,
@@ -474,6 +497,8 @@ class WakeWordService : Service() {
         const val KEY_LAST_SCORE = "last_confidence_score"
         const val KEY_LAST_DETECTION_AT = "last_detection_at"
         const val KEY_LAUNCH_METHOD = "launch_method"
+        const val KEY_JARVIS_ENABLED = "jarvis_enabled"
+        const val KEY_LAST_PHRASE = "last_phrase"
 
         private const val TAG = "WakePhraseService"
         private const val SAMPLE_RATE = 16000
